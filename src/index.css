@@ -1,0 +1,83 @@
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Space+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+    --color-portfolio-bg: #FFFFFF;
+    --color-portfolio-text: #000000;
+    --font-header: "Share Tech Mono", "Space Mono", monospace;
+    --font-body: "Space Mono", monospace;
+}
+
+@layer base {
+    html {
+        scroll-behavior: smooth;
+    }
+
+    body {
+        margin: 0;
+        padding: 0;
+        background-color: var(--color-portfolio-bg);
+        color: var(--color-portfolio-text);
+        font-family: var(--font-body);
+        overflow-x: hidden;
+        overflow-y: scroll;
+    }
+
+    #root {
+        width: 100%;
+        min-height: 100vh;
+    }
+
+    h1,
+    h2,
+    h3 {
+        font-family: var(--font-header);
+    }
+}
+
+/* CUSTOM SCROLLBAR - Task 3 */
+::-webkit-scrollbar {
+    width: 12px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+::-webkit-scrollbar-thumb {
+    background-color: #000000;
+    border-radius: 0;
+    border: 2px solid var(--color-portfolio-bg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background-color: #333333;
+}
+
+/* Firefox scrollbar */
+* {
+    scrollbar-width: auto;
+    scrollbar-color: #000000 rgba(0, 0, 0, 0.05);
+}
+
+/* Pulse animation */
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.animate-pulse {
+    animation: pulse 2s ease-in-out infinite;
+}
+
+canvas {
+    touch-action: none;
+    outline: none;
+}
