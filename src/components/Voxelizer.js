@@ -81,20 +81,27 @@ export const generatePlanePoints = ({ width = 50, height = 30, spacing = 1.0 }) 
 };
 
 /**
- * Generate voxel points from a GLTF mesh geometry using surface sampling.
- * Samples random points on the surface of each triangle.
+ * Generate voxel points from a GLTF mesh geometry using GUARANTEED COVERAGE.
+ * 
+ * Algorithm ensures ALL parts of the model are represented by:
+ * 1. Sampling exactly ONE random point per triangle (guarantees coverage)
+ * 2. Applying spatial hashing to remove density bias from tessellation
+ * 3. Using stratified sampling to maintain distribution when downsampling
+ * 
+ * This prevents dense mesh regions from consuming the point budget before
+ * sparse regions (like thin antennas) are sampled.
+ * 
  * @param {THREE.BufferGeometry} geometry - The geometry to sample from
- * @param {number} pointsPerUnit - Approximate points per unit area
+ * @param {number} pointsPerUnit - Unused, kept for API compatibility
  * @param {number} scale - Scale factor for the model
  */
 export const generateMeshPoints = (geometry, { pointsPerUnit = 0.5, scale = 8 }) => {
     if (!geometry) return padToPoolSize([]);
 
-    const points = [];
     const posAttr = geometry.attributes.position;
     if (!posAttr) return padToPoolSize([]);
 
-    // Compute bounding box for centering
+    // Compute bounding box for centering and scaling
     geometry.computeBoundingBox();
     const bbox = geometry.boundingBox;
     const center = new THREE.Vector3();
@@ -109,7 +116,13 @@ export const generateMeshPoints = (geometry, { pointsPerUnit = 0.5, scale = 8 })
         ? indexAttr.count / 3
         : posAttr.count / 3;
 
-    // Sample points on each triangle
+    // =========================================================================
+    // PASS 1: GUARANTEED COVERAGE - Sample exactly ONE point per triangle
+    // This ensures every part of the mesh gets representation, regardless of
+    // how densely tessellated different regions are.
+    // =========================================================================
+    const onePerTriangle = [];
+
     for (let i = 0; i < triangleCount; i++) {
         let i0, i1, i2;
         if (indexAttr) {
@@ -122,71 +135,127 @@ export const generateMeshPoints = (geometry, { pointsPerUnit = 0.5, scale = 8 })
             i2 = i * 3 + 2;
         }
 
-        const v0 = new THREE.Vector3(
-            posAttr.getX(i0),
-            posAttr.getY(i0),
-            posAttr.getZ(i0)
-        );
-        const v1 = new THREE.Vector3(
-            posAttr.getX(i1),
-            posAttr.getY(i1),
-            posAttr.getZ(i1)
-        );
-        const v2 = new THREE.Vector3(
-            posAttr.getX(i2),
-            posAttr.getY(i2),
-            posAttr.getZ(i2)
-        );
+        const v0x = posAttr.getX(i0), v0y = posAttr.getY(i0), v0z = posAttr.getZ(i0);
+        const v1x = posAttr.getX(i1), v1y = posAttr.getY(i1), v1z = posAttr.getZ(i1);
+        const v2x = posAttr.getX(i2), v2y = posAttr.getY(i2), v2z = posAttr.getZ(i2);
 
-        // Calculate triangle area
-        const edge1 = new THREE.Vector3().subVectors(v1, v0);
-        const edge2 = new THREE.Vector3().subVectors(v2, v0);
-        const cross = new THREE.Vector3().crossVectors(edge1, edge2);
-        const area = cross.length() * 0.5;
+        // Random barycentric coordinates
+        let r1 = Math.random();
+        let r2 = Math.random();
+        if (r1 + r2 > 1) {
+            r1 = 1 - r1;
+            r2 = 1 - r2;
+        }
+        const r3 = 1 - r1 - r2;
 
-        // Number of points to sample based on area
-        const numSamples = Math.max(1, Math.floor(area * pointsPerUnit * scaleFactor * scaleFactor));
+        // Sample point on triangle
+        const px = v0x * r1 + v1x * r2 + v2x * r3;
+        const py = v0y * r1 + v1y * r2 + v2y * r3;
+        const pz = v0z * r1 + v1z * r2 + v2z * r3;
 
-        for (let j = 0; j < numSamples; j++) {
-            // Barycentric random sampling
-            let r1 = Math.random();
-            let r2 = Math.random();
-            if (r1 + r2 > 1) {
-                r1 = 1 - r1;
-                r2 = 1 - r2;
-            }
-            const r3 = 1 - r1 - r2;
+        // Center and scale
+        onePerTriangle.push(new THREE.Vector3(
+            (px - center.x) * scaleFactor,
+            (py - center.y) * scaleFactor,
+            (pz - center.z) * scaleFactor
+        ));
+    }
 
-            const px = v0.x * r1 + v1.x * r2 + v2.x * r3;
-            const py = v0.y * r1 + v1.y * r2 + v2.y * r3;
-            const pz = v0.z * r1 + v1.z * r2 + v2.z * r3;
+    // =========================================================================
+    // PASS 2: GRID-ALIGNED SPATIAL HASHING
+    // Snap all points to a regular 3D grid for clean, uniform appearance.
+    // This matches the website's grid-like design language while maintaining
+    // full model coverage from Pass 1.
+    // =========================================================================
+    const scaledSize = size.clone().multiplyScalar(scaleFactor);
+    const scaledMaxDim = Math.max(scaledSize.x, scaledSize.y, scaledSize.z);
 
-            // Center and scale the point
-            const scaledPoint = new THREE.Vector3(
-                (px - center.x) * scaleFactor,
-                (py - center.y) * scaleFactor,
-                (pz - center.z) * scaleFactor
-            );
+    // Calculate grid resolution - aim for roughly cbrt(POINT_POOL_SIZE) points per axis
+    // This gives us a grid that can hold about POINT_POOL_SIZE points if fully occupied
+    const gridResolution = Math.max(50, Math.ceil(Math.cbrt(POINT_POOL_SIZE * 20)));
+    const cellSize = scaledMaxDim / gridResolution;
 
-            points.push(scaledPoint);
+    // Offset to center the grid around origin
+    const gridOffset = scaledMaxDim / 2;
+
+    const occupiedCells = new Set();
+    const gridPoints = [];
+
+    for (const point of onePerTriangle) {
+        // Calculate which grid cell this point falls into
+        const cellX = Math.floor((point.x + gridOffset) / cellSize);
+        const cellY = Math.floor((point.y + gridOffset) / cellSize);
+        const cellZ = Math.floor((point.z + gridOffset) / cellSize);
+        const key = `${cellX},${cellY},${cellZ}`;
+
+        if (!occupiedCells.has(key)) {
+            occupiedCells.add(key);
+
+            // SNAP to grid cell center instead of keeping random position
+            // This creates clean, uniform grid appearance
+            const snappedX = (cellX + 0.5) * cellSize - gridOffset;
+            const snappedY = (cellY + 0.5) * cellSize - gridOffset;
+            const snappedZ = (cellZ + 0.5) * cellSize - gridOffset;
+
+            gridPoints.push(new THREE.Vector3(snappedX, snappedY, snappedZ));
         }
     }
 
-    // If we have too few points, add vertex positions too
-    if (points.length < 100) {
-        for (let i = 0; i < posAttr.count; i++) {
+    // Use grid-snapped points
+    let spatialPoints = gridPoints;
+
+    // =========================================================================
+    // PASS 3: STRATIFIED DOWNSAMPLING - Maintain spatial distribution
+    // If we have more points than the pool allows, use stratified sampling
+    // to ensure we keep good coverage across the entire model.
+    // =========================================================================
+    let finalPoints;
+
+    if (spatialPoints.length > POINT_POOL_SIZE) {
+        // Sort by a space-filling curve approximation for spatial coherence
+        spatialPoints.sort((a, b) => {
+            const quantize = (v) => Math.floor((v + scaledMaxDim / 2) / scaledMaxDim * 1000);
+            const ax = quantize(a.x), ay = quantize(a.y), az = quantize(a.z);
+            const bx = quantize(b.x), by = quantize(b.y), bz = quantize(b.z);
+
+            // Morton-like ordering for spatial coherence
+            const sumA = ax + ay + az;
+            const sumB = bx + by + bz;
+            if (sumA !== sumB) return sumA - sumB;
+            if (ax !== bx) return ax - bx;
+            if (ay !== by) return ay - by;
+            return az - bz;
+        });
+
+        // Take evenly spaced samples to maintain full coverage
+        finalPoints = [];
+        const step = spatialPoints.length / POINT_POOL_SIZE;
+        for (let i = 0; i < POINT_POOL_SIZE; i++) {
+            const idx = Math.min(Math.floor(i * step), spatialPoints.length - 1);
+            finalPoints.push(spatialPoints[idx]);
+        }
+    } else {
+        finalPoints = spatialPoints;
+    }
+
+    // =========================================================================
+    // FALLBACK: If geometry has very few triangles, add vertices directly
+    // =========================================================================
+    if (finalPoints.length < 100) {
+        for (let i = 0; i < posAttr.count && finalPoints.length < POINT_POOL_SIZE; i++) {
             const px = posAttr.getX(i);
             const py = posAttr.getY(i);
             const pz = posAttr.getZ(i);
 
-            const scaledPoint = new THREE.Vector3(
+            finalPoints.push(new THREE.Vector3(
                 (px - center.x) * scaleFactor,
                 (py - center.y) * scaleFactor,
                 (pz - center.z) * scaleFactor
-            );
-            points.push(scaledPoint);
+            ));
         }
     }
 
-    return padToPoolSize(points);
+    return padToPoolSize(finalPoints);
 };
+
+

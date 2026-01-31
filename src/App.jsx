@@ -1,28 +1,57 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { WorldGrid } from './components/WorldGrid';
+import { ProjectDetailModal } from './components/ProjectDetailModal';
+import { projects } from './data/projects';
 import gsap from 'gsap';
 import './index.css';
 
 function App() {
-    const [activeShape, setActiveShape] = useState('plane');
+    const [currentProjectIndex, setCurrentProjectIndex] = useState(-1); // -1 = no project active
     const [viewMode, setViewMode] = useState('LANDING');
-    const [layoutLocked, setLayoutLocked] = useState(false); // Lock layout during exit animation
-    const [isExiting, setIsExiting] = useState(false); // Track exit animation
+    const [layoutLocked, setLayoutLocked] = useState(false);
+    const [isExiting, setIsExiting] = useState(false);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [modalProject, setModalProject] = useState(null);
+    const [emailCopied, setEmailCopied] = useState(false);
+    const scrollThumbRef = useRef(null);
     const headerRef = useRef(null);
     const prevViewModeRef = useRef('LANDING');
-    const layoutLockedRef = useRef(false); // Ref to read current value in scroll handler
+    const layoutLockedRef = useRef(false);
 
+    // Calculate scroll thresholds dynamically based on project count
+    // HTML structure: Hero (100vh) + About (100vh) + Projects (100vh each) + Contact (100vh)
+    const scrollConfig = useMemo(() => {
+        const vh = window.innerHeight;
 
-    // Scroll thresholds
-    const heroEnd = 300;           // End of hero header transition
-    const aboutStart = 100;        // When About section becomes visible
-    const aboutEnd = window.innerHeight * 1.8;  // End of About section
-    const projectsStart = window.innerHeight * 2;  // Projects begin
+        // Hero section: 0 to 1vh
+        const heroEnd = vh * 0.5;  // Header animation completes halfway through hero
+
+        // About section: 1vh to 2vh
+        const aboutStart = vh * 0.8;  // Start About mode near end of hero
+        const aboutEnd = vh * 1.8;    // End About mode near end of About section
+
+        // Projects section: 2vh to (2 + projectCount)vh
+        const projectsStart = vh * 2;  // Each project section starts at its natural position
+
+        // Each project takes 1vh of scroll space, aligned to info box centers
+        const projectSections = projects.map((_, i) => ({
+            start: projectsStart + (i * vh) - (vh * 0.3),  // Trigger slightly before info box center
+            end: projectsStart + ((i + 1) * vh) - (vh * 0.3),
+        }));
+
+        // Contact section starts after all projects
+        const contactStart = projectsStart + ((projects.length - 1) * vh) + (vh * 0.5);
+
+        // Total page height: hero + about + projects + contact
+        const totalHeight = vh + vh + (projects.length * vh) + vh;
+
+        return { heroEnd, aboutStart, aboutEnd, projectsStart, projectSections, contactStart, totalHeight, vh };
+    }, []);
 
     useEffect(() => {
         const handleScroll = () => {
             const scrollY = window.scrollY;
-            const vh = window.innerHeight;
+            const { heroEnd, aboutStart, aboutEnd, projectSections, contactStart, vh } = scrollConfig;
 
             // Header animation progress (0 to 1)
             const headerProgress = Math.max(0, Math.min(1, scrollY / heroEnd));
@@ -55,36 +84,34 @@ function App() {
 
                 const contactLinks = headerRef.current.querySelector('.header-contacts');
                 if (contactLinks) {
-                    // Fade in contacts when header is mostly collapsed (progress > 0.8)
                     const opacity = Math.max(0, (headerProgress - 0.8) * 5);
                     gsap.to(contactLinks, { opacity: opacity, duration: 0.1 });
                     contactLinks.style.pointerEvents = opacity > 0.5 ? 'auto' : 'none';
                 }
             }
 
-            // State machine for viewMode and activeShape
-            // State 0: LANDING (Hero) - 0 to ~100px
-            // State 1: ABOUT - ~100px to ~2vh (full width grid)
-            // State 2+: PROJECTS - 2vh+
-            // State 4: CONTACT - 4vh+
-
-            let newViewMode, newActiveShape;
+            // Determine viewMode and current project index
+            let newViewMode, newProjectIndex = -1;
 
             if (scrollY < aboutStart) {
                 newViewMode = 'LANDING';
-                newActiveShape = 'plane';
             } else if (scrollY < aboutEnd) {
                 newViewMode = 'ABOUT';
-                newActiveShape = 'plane';
-            } else if (scrollY < vh * 3) {
+            } else if (scrollY < contactStart) {
+                // In projects zone - find which project
                 newViewMode = 'PROJECT';
-                newActiveShape = 'gltf';
-            } else if (scrollY < vh * 4) {
-                newViewMode = 'PROJECT';
-                newActiveShape = 'sphere';
+                for (let i = 0; i < projectSections.length; i++) {
+                    if (scrollY >= projectSections[i].start && scrollY < projectSections[i].end) {
+                        newProjectIndex = i;
+                        break;
+                    }
+                }
+                // Handle edge case at very start of projects zone
+                if (newProjectIndex === -1 && scrollY >= aboutEnd) {
+                    newProjectIndex = 0;
+                }
             } else {
                 newViewMode = 'CONTACT';
-                newActiveShape = 'plane';
             }
 
             // Detect CASE 3: Exiting from PROJECT to full-width mode
@@ -93,7 +120,6 @@ function App() {
             const goingToFullWidth = isFullWidthMode(newViewMode);
 
             if (wasProject && goingToFullWidth && !layoutLockedRef.current) {
-                // CASE 3: Lock the layout at 60% during exit animation
                 layoutLockedRef.current = true;
                 setLayoutLocked(true);
                 setIsExiting(true);
@@ -101,15 +127,22 @@ function App() {
 
             prevViewModeRef.current = newViewMode;
             setViewMode(newViewMode);
-            setActiveShape(newActiveShape);
+            setCurrentProjectIndex(newProjectIndex);
+
+            // Update scroll thumb position directly (no React re-render)
+            if (scrollThumbRef.current) {
+                const totalScrollable = scrollConfig.totalHeight - window.innerHeight;
+                const progress = totalScrollable > 0 ? (scrollY / totalScrollable) * 85 : 0;
+                scrollThumbRef.current.style.top = `${Math.min(85, Math.max(0, progress))}%`;
+            }
         };
 
         handleScroll();
         window.addEventListener('scroll', handleScroll, { passive: true });
         return () => window.removeEventListener('scroll', handleScroll);
-    }, []); // Empty deps - refs track current values
+    }, [scrollConfig]);
 
-    // Separate one-time initialization for header position
+    // One-time header position initialization
     useEffect(() => {
         if (headerRef.current) {
             gsap.set(headerRef.current, {
@@ -128,13 +161,36 @@ function App() {
         }
     }, [isExiting]);
 
+    // Modal handlers
+    const handleOpenModal = useCallback((project) => {
+        if (!project.details) return; // Skip projects without details
+        setModalProject(project);
+        setIsModalOpen(true);
+    }, []);
+
+    const handleCloseModal = useCallback(() => {
+        setIsModalOpen(false);
+        setModalProject(null);
+    }, []);
+
+    // Scroll lock when modal is open
+    useEffect(() => {
+        if (isModalOpen) {
+            document.body.style.overflow = 'hidden';
+        } else {
+            document.body.style.overflow = '';
+        }
+        return () => {
+            document.body.style.overflow = '';
+        };
+    }, [isModalOpen]);
+
     const isLanding = viewMode === 'LANDING';
-    const isAbout = viewMode === 'ABOUT';
-    const isContact = viewMode === 'CONTACT';
     const isProject = viewMode === 'PROJECT';
-    // Show left panel overlay only in PROJECT mode
     const showLeftPanel = isProject;
 
+    // Get current project from config
+    const currentProject = currentProjectIndex >= 0 ? projects[currentProjectIndex] : null;
 
     return (
         <>
@@ -147,7 +203,7 @@ function App() {
                 height: '100vh',
                 zIndex: 0,
             }}>
-                <WorldGrid activeShape={activeShape} viewMode={viewMode} onAnimationComplete={handleAnimationComplete} />
+                <WorldGrid currentProject={currentProject} viewMode={viewMode} onAnimationComplete={handleAnimationComplete} allProjects={projects} />
             </div>
 
             {/* LEFT PANEL BACKGROUND - Blocks OrbitControls on left 40% */}
@@ -159,13 +215,42 @@ function App() {
                 transition: 'opacity 0.3s ease',
             }} />
 
-            {/* ZONE DIVIDER */}
+            {/* ZONE DIVIDER with Scroll Indicator */}
             <div style={{
                 position: 'fixed', top: 0, left: '40%', width: '1px', height: '100%',
                 background: 'linear-gradient(to bottom, transparent 5%, rgba(0,0,0,0.15) 50%, transparent 95%)',
                 zIndex: 15, pointerEvents: 'none', opacity: showLeftPanel ? 1 : 0,
                 transition: 'opacity 0.3s ease',
             }} />
+
+            {/* Scroll Track - Visual scrollbar on left panel edge */}
+            <div style={{
+                position: 'fixed',
+                top: '10%',
+                left: 'calc(40% - 6px)',
+                width: '4px',
+                height: '80%',
+                background: 'rgba(0,0,0,0.08)',
+                borderRadius: '2px',
+                zIndex: 16,
+                pointerEvents: 'none',
+                opacity: showLeftPanel ? 1 : 0,
+                transition: 'opacity 0.3s ease',
+            }}>
+                {/* Scroll Thumb - Indicates current scroll position */}
+                <div
+                    ref={scrollThumbRef}
+                    style={{
+                        position: 'absolute',
+                        top: '0%',
+                        left: 0,
+                        width: '100%',
+                        height: '15%',
+                        background: 'rgba(0,0,0,0.35)',
+                        borderRadius: '2px',
+                    }}
+                />
+            </div>
 
             {/* ZONE LABELS */}
             <div style={{
@@ -211,9 +296,17 @@ function App() {
                         <div className="header-contacts" style={{
                             marginTop: '0.5rem', display: 'flex', gap: '1rem', opacity: 0, pointerEvents: 'none'
                         }}>
-                            <a href="mailto:abennett@umass.edu" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor' }}>EMAIL</a>
-                            <a href="#" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor' }}>GITHUB</a>
-                            <a href="#" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor' }}>LINKEDIN</a>
+                            <button
+                                onClick={() => {
+                                    navigator.clipboard.writeText('bennettasher7@gmail.com');
+                                    setEmailCopied(true);
+                                    setTimeout(() => setEmailCopied(false), 2000);
+                                }}
+                                style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#000', background: 'none', border: 'none', borderBottom: '1px solid currentColor', cursor: 'pointer', padding: 0 }}
+                            >{emailCopied ? 'COPIED!' : 'EMAIL'}</button>
+                            <a href="https://github.com/Hernahan" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor' }}>GITHUB</a>
+                            <a href="https://linkedin.com/in/asherbennett1" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor' }}>LINKEDIN</a>
+                            <a href="/Asher_Bennett_Resume (13).pdf" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor' }}>RESUME</a>
                         </div>
 
                         <div style={{
@@ -271,9 +364,7 @@ function App() {
                             color: '#333',
                             marginBottom: '1.5rem',
                         }}>
-                            First-year Mechanical Engineering student at <strong>UMass Amherst</strong>,
-                            passionate about bridging digital design with real-world applications.
-                            Currently serving on the <strong>Payload Mechanical Subteam</strong> for the university rocket program.
+                            Second-year Mechanical Engineering student at <strong>UMass Amherst</strong> passionate about <em style={{ textDecoration: 'underline' }}>humanoid robotics</em> and <em style={{ textDecoration: 'underline' }}>aerospace</em>. Currently developing a humanoid hand as an interest-based challenge project.
                         </p>
 
                         <p style={{
@@ -283,8 +374,7 @@ function App() {
                             color: '#333',
                             marginBottom: '1.5rem',
                         }}>
-                            My work explores the intersection of hands-on fabrication, DIY electronics,
-                            and computational simulation—building tools that make complex engineering tangible.
+                            I focus on hands-on prototyping to gain the technical skills needed to move a project from a design to a finished, working system.
                         </p>
 
                         <div style={{
@@ -302,43 +392,75 @@ function App() {
                     </div>
                 </section>
 
-                {/* === SECTION 3: PROJECT 1 (CUBE) === */}
-                <section style={{ height: '100vh', width: '100%', display: 'flex', alignItems: 'center', padding: '3rem' }}>
-                    <div style={{
-                        width: '36%', backgroundColor: 'rgba(255,255,255,0.94)', padding: '2rem', pointerEvents: 'auto',
-                        backdropFilter: 'blur(12px)', border: '1px solid rgba(0,0,0,0.08)', boxShadow: '0 4px 30px rgba(0,0,0,0.04)',
-                    }}>
-                        <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', color: '#888', letterSpacing: '0.15em' }}>PROJECT_01</span>
-                        <h3 style={{ fontSize: '1.5rem', fontFamily: 'var(--font-header)', margin: '0.5rem 0 0.75rem', fontWeight: 400 }}>Voxel Engine</h3>
-                        <p style={{ fontFamily: 'var(--font-body)', fontSize: '0.75rem', lineHeight: 1.7, color: '#444' }}>
-                            A custom volumetric rendering engine built in React Three Fiber. Demonstrates real-time Manhattan distance pathfinding.
-                        </p>
-                        <div style={{ marginTop: '1.25rem', display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                            <span style={{ padding: '0.2rem 0.4rem', background: '#000', color: '#fff', fontSize: '0.6rem', fontFamily: 'monospace' }}>THREE.JS</span>
-                            <span style={{ padding: '0.2rem 0.4rem', background: '#f0f0f0', color: '#000', fontSize: '0.6rem', fontFamily: 'monospace' }}>GSAP</span>
-                        </div>
-                    </div>
-                </section>
+                {/* === DYNAMIC PROJECT SECTIONS === */}
+                {projects.map((project, index) => (
+                    <section
+                        key={project.id}
+                        style={{ height: '100vh', width: '100%', display: 'flex', alignItems: 'center', padding: '3rem' }}
+                    >
+                        <div style={{
+                            width: '36%', backgroundColor: 'rgba(255,255,255,0.94)', padding: '2rem', pointerEvents: 'auto',
+                            backdropFilter: 'blur(12px)', border: '1px solid rgba(0,0,0,0.08)', boxShadow: '0 4px 30px rgba(0,0,0,0.04)',
+                        }}>
+                            <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', color: '#888', letterSpacing: '0.15em' }}>
+                                PROJECT_{String(index + 1).padStart(2, '0')}
+                            </span>
+                            <h3 style={{ fontSize: '1.5rem', fontFamily: 'var(--font-header)', margin: '0.5rem 0 0.75rem', fontWeight: 400 }}>
+                                {project.title}
+                            </h3>
+                            <p style={{ fontFamily: 'var(--font-body)', fontSize: '0.75rem', lineHeight: 1.7, color: '#444' }}>
+                                {project.description}
+                            </p>
+                            <div style={{ marginTop: '1.25rem', display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                {project.tags.map((tag, tagIndex) => (
+                                    <span
+                                        key={tag}
+                                        style={{
+                                            padding: '0.2rem 0.4rem',
+                                            background: tagIndex === 0 ? '#000' : '#f0f0f0',
+                                            color: tagIndex === 0 ? '#fff' : '#000',
+                                            fontSize: '0.6rem',
+                                            fontFamily: 'monospace'
+                                        }}
+                                    >
+                                        {tag}
+                                    </span>
+                                ))}
+                            </div>
 
-                {/* === SECTION 4: PROJECT 2 (SPHERE) === */}
-                <section style={{ height: '100vh', width: '100%', display: 'flex', alignItems: 'center', padding: '3rem' }}>
-                    <div style={{
-                        width: '36%', backgroundColor: 'rgba(255,255,255,0.94)', padding: '2rem', pointerEvents: 'auto',
-                        backdropFilter: 'blur(12px)', border: '1px solid rgba(0,0,0,0.08)', boxShadow: '0 4px 30px rgba(0,0,0,0.04)',
-                    }}>
-                        <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', color: '#888', letterSpacing: '0.15em' }}>PROJECT_02</span>
-                        <h3 style={{ fontSize: '1.5rem', fontFamily: 'var(--font-header)', margin: '0.5rem 0 0.75rem', fontWeight: 400 }}>Sphere Logic</h3>
-                        <p style={{ fontFamily: 'var(--font-body)', fontSize: '0.75rem', lineHeight: 1.7, color: '#444' }}>
-                            Exploration of spherical coordinate mapping and radial transitions.
-                        </p>
-                        <div style={{ marginTop: '1.25rem', display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                            <span style={{ padding: '0.2rem 0.4rem', background: '#000', color: '#fff', fontSize: '0.6rem', fontFamily: 'monospace' }}>WEBGL</span>
-                            <span style={{ padding: '0.2rem 0.4rem', background: '#f0f0f0', color: '#000', fontSize: '0.6rem', fontFamily: 'monospace' }}>MATH</span>
+                            {/* More Information Button */}
+                            {project.details && (
+                                <button
+                                    onClick={() => handleOpenModal(project)}
+                                    style={{
+                                        marginTop: '1.5rem',
+                                        padding: '0.6rem 1.2rem',
+                                        background: '#000',
+                                        color: '#fff',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        fontFamily: 'monospace',
+                                        fontSize: '0.7rem',
+                                        letterSpacing: '0.1em',
+                                        transition: 'all 0.2s ease',
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        e.target.style.background = '#333';
+                                        e.target.style.transform = 'translateY(-1px)';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        e.target.style.background = '#000';
+                                        e.target.style.transform = 'translateY(0)';
+                                    }}
+                                >
+                                    MORE INFORMATION →
+                                </button>
+                            )}
                         </div>
-                    </div>
-                </section>
+                    </section>
+                ))}
 
-                {/* === SECTION 5: CONTACT === */}
+                {/* === CONTACT SECTION === */}
                 <section style={{ height: '100vh', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '3rem' }}>
                     <div style={{
                         textAlign: 'center', pointerEvents: 'auto', backgroundColor: 'rgba(255,255,255,0.94)',
@@ -347,13 +469,28 @@ function App() {
                         <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', color: '#888', letterSpacing: '0.2em', display: 'block', marginBottom: '1rem' }}>SAY HELLO</span>
                         <h2 style={{ fontSize: '2.5rem', fontFamily: 'var(--font-header)', marginBottom: '2rem', fontWeight: 400 }}>GET IN TOUCH</h2>
                         <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem', flexWrap: 'wrap' }}>
-                            <a href="mailto:abennett@umass.edu" style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor', paddingBottom: '0.2em' }}>EMAIL</a>
-                            <a href="#" style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor', paddingBottom: '0.2em' }}>GITHUB</a>
-                            <a href="#" style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor', paddingBottom: '0.2em' }}>LINKEDIN</a>
+                            <button
+                                onClick={() => {
+                                    navigator.clipboard.writeText('bennettasher7@gmail.com');
+                                    setEmailCopied(true);
+                                    setTimeout(() => setEmailCopied(false), 2000);
+                                }}
+                                style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#000', background: 'none', border: 'none', borderBottom: '1px solid currentColor', cursor: 'pointer', padding: 0, paddingBottom: '0.2em' }}
+                            >{emailCopied ? 'COPIED!' : 'EMAIL'}</button>
+                            <a href="https://github.com/Hernahan" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor', paddingBottom: '0.2em' }}>GITHUB</a>
+                            <a href="https://linkedin.com/in/asherbennett1" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor', paddingBottom: '0.2em' }}>LINKEDIN</a>
+                            <a href="/Asher_Bennett_Resume (13).pdf" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor', paddingBottom: '0.2em' }}>RESUME</a>
                         </div>
                     </div>
                 </section>
             </div>
+
+            {/* Deep Dive Modal */}
+            <ProjectDetailModal
+                project={modalProject}
+                isOpen={isModalOpen}
+                onClose={handleCloseModal}
+            />
         </>
     );
 }

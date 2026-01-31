@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useEffect, useState } from 'react';
+import React, { useMemo, useRef, useEffect, useState, useCallback } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
@@ -10,29 +10,10 @@ import gsap from 'gsap';
 // View Offset Rig - Shifts the lens/viewport WITHOUT moving camera or pivot
 const ViewOffsetRig = ({ viewMode }) => {
     const { camera, size } = useThree();
-    const offsetRef = useRef({ x: 0 }); // Proxy for animation
+    const offsetRef = useRef({ x: 0 });
 
     useEffect(() => {
         const isProject = viewMode === 'PROJECT';
-        // -0.2 means shift window LEFT by 20% -> Objects move RIGHT
-        // Center of Right 60% is 70%. Center of screen is 50%. Diff is +20%.
-        // We want object at 50% to appear at 70%? 
-        // No, we want the center of the Right 60% (which is at x=70%) to be the center of the viewport?
-        // Wait. 
-        // Screen: [0 ... 100]. Center 50.
-        // Right Panel: [40 ... 100]. Center 70.
-        // We want Model (at strict center) to appear at 70.
-        // So we need to shift the image RIGHT by 20.
-        // camera.setViewOffset x: 
-        // "x: offset of the subwindow". 
-        // If x is positive, the subwindow is to the right. 
-        // The camera maps the frustum to the subwindow.
-        // If we choose a subwindow to the LEFT (negative x), the camera looks left. Objects move RIGHT.
-        // So target is -0.15 (tune to taste, -0.2 might be too much if panel is 60%)
-        // Let's use -0.1 (10% shift) first, or calculate precisely.
-        // To shift image center from 50 to 70 is +20 (of full width).
-        // So we need to shift viewport Left by 20%. -> x = -0.2 * width.
-
         gsap.to(offsetRef.current, {
             x: isProject ? -0.2 : 0,
             duration: 1.5,
@@ -43,7 +24,6 @@ const ViewOffsetRig = ({ viewMode }) => {
     useFrame(() => {
         const w = size.width;
         const h = size.height;
-        // Apply view offset (lens shift)
         camera.setViewOffset(w, h, offsetRef.current.x * w, 0, w, h);
     });
 
@@ -56,10 +36,8 @@ const CameraRig = ({ viewMode }) => {
 
     useEffect(() => {
         if (viewMode === 'LANDING' || viewMode === 'ABOUT' || viewMode === 'CONTACT') {
-            // Full-screen centered view for plane
             gsap.to(camera.position, { x: 0, y: 0, z: 20, duration: 1.5, ease: "power2.inOut" });
         } else {
-            // Project mode: Camera stays centered (x=0), ViewOffsetRig handles the visual shift
             gsap.to(camera.position, { x: 0, y: 5, z: 18, duration: 1.5, ease: "power2.inOut" });
         }
     }, [viewMode, camera]);
@@ -93,62 +71,156 @@ const ZoomController = ({ viewMode }) => {
     return null;
 };
 
-// GLTF loader component - collects all meshes
-const GLTFPointGenerator = ({ onLoad }) => {
-    const gltf = useGLTF('/CAD-files/gltf test file correct orientation.gltf');
+/**
+ * Preloads and caches GLTF points for all projects
+ * This runs once at mount to ensure points are ready before any transition
+ */
+const useProjectPointsCache = (projects, shapes) => {
+    const [cache, setCache] = useState({});
+    const loadingRef = useRef({});
+
+    // Preload all project models on mount
+    useEffect(() => {
+        if (!projects || projects.length === 0) return;
+
+        projects.forEach((project) => {
+            if (!project) return;
+
+            const cacheKey = project.id;
+
+            // Skip if already cached or loading
+            if (cache[cacheKey] || loadingRef.current[cacheKey]) return;
+
+            // Handle built-in shapes
+            if (!project.modelPath && project.builtInShape) {
+                setCache(prev => ({
+                    ...prev,
+                    [cacheKey]: shapes[project.builtInShape] || shapes.cube
+                }));
+                return;
+            }
+
+            // Load external model
+            if (project.modelPath) {
+                loadingRef.current[cacheKey] = true;
+
+                // Use useGLTF.preload for caching
+                useGLTF.preload(project.modelPath);
+            }
+        });
+    }, [projects, shapes]);
+
+    return cache;
+};
+
+/**
+ * Processes loaded GLTF and updates cache
+ */
+const GLTFCacheLoader = ({ project, shapes, onCached }) => {
+    const gltf = useGLTF(project.modelPath);
+    const processedRef = useRef(false);
 
     useEffect(() => {
-        if (gltf && gltf.scene) {
-            // Collect all geometries from the scene
-            const geometries = [];
-            gltf.scene.traverse((child) => {
-                if (child.isMesh && child.geometry) {
-                    // Clone and apply world matrix to each geometry
-                    const clonedGeo = child.geometry.clone();
-                    child.updateMatrixWorld(true);
-                    clonedGeo.applyMatrix4(child.matrixWorld);
-                    geometries.push(clonedGeo);
-                }
-            });
+        if (!gltf || !gltf.scene || processedRef.current) return;
+        processedRef.current = true;
 
-            if (geometries.length > 0) {
-                // Merge all geometries into one
-                const mergedGeometry = mergeGeometries(geometries, false);
-
-                if (mergedGeometry) {
-                    const points = generateMeshPoints(mergedGeometry, { pointsPerUnit: 0.3, scale: 8 });
-                    onLoad(points);
-
-                    // Cleanup
-                    mergedGeometry.dispose();
-                }
-
-                // Cleanup cloned geometries
-                geometries.forEach(g => g.dispose());
+        const geometries = [];
+        gltf.scene.traverse((child) => {
+            if (child.isMesh && child.geometry) {
+                const clonedGeo = child.geometry.clone();
+                child.updateMatrixWorld(true);
+                clonedGeo.applyMatrix4(child.matrixWorld);
+                geometries.push(clonedGeo);
             }
+        });
+
+        if (geometries.length > 0) {
+            const mergedGeometry = mergeGeometries(geometries, false);
+
+            if (mergedGeometry) {
+                const points = generateMeshPoints(mergedGeometry, {
+                    pointsPerUnit: project.pointsPerUnit || 0.3,
+                    scale: project.scale || 8
+                });
+                onCached(project.id, points);
+                mergedGeometry.dispose();
+            }
+
+            geometries.forEach(g => g.dispose());
         }
-    }, [gltf, onLoad]);
+    }, [gltf, project, onCached]);
 
     return null;
 };
 
-const GridParticles = ({ activeShape, onAnimationComplete }) => {
+const GridParticles = ({ currentProject, viewMode, onAnimationComplete, allProjects }) => {
     const meshRef = useRef();
-    const [gltfPoints, setGltfPoints] = useState(null);
+    const [pointsCache, setPointsCache] = useState({});
+    const prevViewModeRef = useRef(viewMode);
 
+    // Built-in shapes (always available)
     const shapes = useMemo(() => ({
         plane: generatePlanePoints({ width: 55, height: 28, spacing: 1.0 }),
         cube: generateCubePoints({ gridSize: [8, 8, 8], spacing: 0.6 }),
         sphere: generateSpherePoints({ radius: 5, spacing: 0.55 })
     }), []);
 
-    // Combine static shapes with dynamic GLTF points
-    const allShapes = useMemo(() => ({
-        ...shapes,
-        gltf: gltfPoints || shapes.cube // Fallback to cube while loading
-    }), [shapes, gltfPoints]);
+    // Callback to cache points when loaded
+    const handleCached = useCallback((id, points) => {
+        setPointsCache(prev => ({ ...prev, [id]: points }));
+    }, []);
 
-    const targetPoints = allShapes[activeShape] || allShapes.plane;
+    // Get projects that need GLTF loading (have modelPath and not yet cached)
+    const projectsToLoad = useMemo(() => {
+        if (!allProjects) return [];
+        return allProjects.filter(p =>
+            p && p.modelPath && !pointsCache[p.id]
+        );
+    }, [allProjects, pointsCache]);
+
+    // Pre-cache built-in shapes immediately
+    useEffect(() => {
+        if (!allProjects) return;
+
+        allProjects.forEach(project => {
+            if (project && !project.modelPath && project.builtInShape) {
+                const shapePoints = shapes[project.builtInShape];
+                if (shapePoints && !pointsCache[project.id]) {
+                    setPointsCache(prev => ({ ...prev, [project.id]: shapePoints }));
+                }
+            }
+        });
+    }, [allProjects, shapes, pointsCache]);
+
+    // Determine target points - STABLE logic to prevent flashing
+    const targetPoints = useMemo(() => {
+        // In PROJECT mode with a current project
+        if (viewMode === 'PROJECT' && currentProject) {
+            const cached = pointsCache[currentProject.id];
+            if (cached) {
+                return cached;
+            }
+            // Model not yet loaded - stay on current points (don't change)
+            // Return null to signal "keep current"
+            return null;
+        }
+
+        // Non-PROJECT mode: always plane
+        return shapes.plane;
+    }, [viewMode, currentProject, pointsCache, shapes]);
+
+    // Use a ref to track the actual target, avoiding null transitions
+    const actualTargetRef = useRef(shapes.plane);
+
+    // Only update actual target when we have valid new points
+    useEffect(() => {
+        if (targetPoints !== null) {
+            actualTargetRef.current = targetPoints;
+        }
+    }, [targetPoints]);
+
+    // The points to animate to - uses ref to avoid flash
+    const animationTarget = targetPoints !== null ? targetPoints : actualTargetRef.current;
 
     const initialPositions = useMemo(() => {
         const arr = new Float32Array(POINT_POOL_SIZE * 3);
@@ -171,11 +243,19 @@ const GridParticles = ({ activeShape, onAnimationComplete }) => {
         return arr;
     }, [shapes]);
 
-    useManhattanAnimation(meshRef, targetPoints, onAnimationComplete);
+    useManhattanAnimation(meshRef, animationTarget, onAnimationComplete, viewMode);
 
     return (
         <>
-            <GLTFPointGenerator onLoad={setGltfPoints} />
+            {/* Load all GLTF models that aren't cached yet */}
+            {projectsToLoad.map(project => (
+                <GLTFCacheLoader
+                    key={project.id}
+                    project={project}
+                    shapes={shapes}
+                    onCached={handleCached}
+                />
+            ))}
             <points ref={meshRef} frustumCulled={false}>
                 <bufferGeometry>
                     <bufferAttribute attach="attributes-position" count={POINT_POOL_SIZE} array={initialPositions} itemSize={3} />
@@ -206,13 +286,18 @@ const GridParticles = ({ activeShape, onAnimationComplete }) => {
     );
 };
 
-export const WorldGrid = ({ activeShape = 'plane', viewMode = 'LANDING', onAnimationComplete }) => {
+export const WorldGrid = ({ currentProject = null, viewMode = 'LANDING', onAnimationComplete, allProjects = [] }) => {
     return (
         <Canvas camera={{ position: [0, 0, 20], fov: 45 }}>
             <color attach="background" args={['#FFFFFF']} />
             <ViewOffsetRig viewMode={viewMode} />
             <CameraRig viewMode={viewMode} />
-            <GridParticles activeShape={activeShape} onAnimationComplete={onAnimationComplete} />
+            <GridParticles
+                currentProject={currentProject}
+                viewMode={viewMode}
+                onAnimationComplete={onAnimationComplete}
+                allProjects={allProjects}
+            />
             <ZoomController viewMode={viewMode} />
             <OrbitControls enablePan={false} enableZoom={false} enableRotate={viewMode === 'PROJECT'} />
         </Canvas>

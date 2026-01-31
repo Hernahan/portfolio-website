@@ -11,7 +11,7 @@ const AXIS_ORDERS = [
     [2, 1, 0], // Z -> Y -> X
 ];
 
-export const useManhattanAnimation = (meshRef, targetPoints, onComplete) => {
+export const useManhattanAnimation = (meshRef, targetPoints, onComplete, viewMode) => {
     const [animating, setAnimating] = useState(false);
     const animDataRef = useRef(null);
     const startTimeRef = useRef(-1);
@@ -138,7 +138,7 @@ export const useManhattanAnimation = (meshRef, targetPoints, onComplete) => {
         startTimeRef.current = -1;
         setAnimating(true);
 
-    }, [targetPoints]);
+    }, [targetPoints, viewMode]);
 
     useFrame((state) => {
         if (!animating || !animDataRef.current || !meshRef.current) return;
