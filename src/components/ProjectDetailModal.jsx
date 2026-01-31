@@ -5,6 +5,50 @@ import * as THREE from 'three';
 import gsap from 'gsap';
 
 /**
+ * Loading Overlay with animated dots
+ * Cycles: loading → loading. → loading.. → loading...
+ */
+const LoadingOverlay = ({ isLoading }) => {
+    const [dots, setDots] = useState(0);
+
+    useEffect(() => {
+        if (!isLoading) return;
+
+        const interval = setInterval(() => {
+            setDots(d => (d + 1) % 4);
+        }, 400);
+
+        return () => clearInterval(interval);
+    }, [isLoading]);
+
+    if (!isLoading) return null;
+
+    return (
+        <div style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            background: 'rgba(245, 245, 245, 0.95)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 100,
+        }}>
+            <span style={{
+                fontFamily: 'monospace',
+                fontSize: '0.9rem',
+                color: '#666',
+                letterSpacing: '0.05em',
+            }}>
+                loading{'.'.repeat(dots)}
+            </span>
+        </div>
+    );
+};
+
+/**
  * Calculate bounding box size and center for a 3D object
  */
 const getBoundingBoxInfo = (object) => {
@@ -36,7 +80,7 @@ const calculateGrid = (partCount) => {
  * Individual Part Component for Grid Layout
  * LIGHT THEME: Dark models on white background
  */
-const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover }) => {
+const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover, onLoaded }) => {
     const [hovered, setHovered] = useState(false);
     const meshRef = useRef();
 
@@ -61,6 +105,13 @@ const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover 
 
         return { clonedScene: clone, scale: targetScale, centerOffset };
     }, [scene, cellSize]);
+
+    // Call onLoaded when the scene is ready
+    useEffect(() => {
+        if (scene) {
+            onLoaded?.();
+        }
+    }, [scene, onLoaded]);
 
     const handlePointerOver = (e) => {
         e.stopPropagation();
@@ -121,7 +172,7 @@ const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover 
  * Parts Grid Scene with drag-to-spin and auto-pause on hover
  * LIGHT THEME: White background
  */
-const PartsGridScene = ({ project }) => {
+const PartsGridScene = ({ project, onLoaded }) => {
     const { viewport, gl } = useThree();
     const groupRef = useRef();
     const isDragging = useRef(false);
@@ -129,6 +180,8 @@ const PartsGridScene = ({ project }) => {
     const manualVelocity = useRef(0);
     const pauseUntil = useRef(0);
     const [isHovering, setIsHovering] = useState(false);
+    const loadedCountRef = useRef(0);
+    const totalPartsRef = useRef(0);
 
     useEffect(() => {
         const canvas = gl.domElement;
@@ -184,10 +237,24 @@ const PartsGridScene = ({ project }) => {
         }
     }, []);
 
+    const handlePartLoaded = useCallback(() => {
+        loadedCountRef.current += 1;
+        if (loadedCountRef.current >= totalPartsRef.current) {
+            onLoaded?.();
+        }
+    }, [onLoaded]);
+
     if (!project?.details?.parts) return null;
 
     const { partsFolder, parts } = project.details;
     const partCount = parts.length;
+
+    // Track total parts for loading callback
+    useEffect(() => {
+        loadedCountRef.current = 0;
+        totalPartsRef.current = partCount;
+    }, [partCount]);
+
     const { cols, rows } = calculateGrid(partCount);
 
     const padding = Math.min(viewport.width, viewport.height) * 0.1;
@@ -228,6 +295,7 @@ const PartsGridScene = ({ project }) => {
                                 name={part.name}
                                 description={part.description}
                                 onHover={handlePartHover}
+                                onLoaded={handlePartLoaded}
                             />
                         </Suspense>
                     );
@@ -241,7 +309,7 @@ const PartsGridScene = ({ project }) => {
  * Solid Assembly Scene
  * LIGHT THEME: Dark models, RMB pan enabled
  */
-const SolidAssemblyScene = ({ project }) => {
+const SolidAssemblyScene = ({ project, onLoaded }) => {
     const { viewport } = useThree();
     const { scene } = useGLTF(project.modelPath);
 
@@ -265,6 +333,13 @@ const SolidAssemblyScene = ({ project }) => {
 
         return { clonedScene: clone, scale: targetScale, centerOffset };
     }, [scene, viewport.width, viewport.height]);
+
+    // Call onLoaded when the scene is ready
+    useEffect(() => {
+        if (scene) {
+            onLoaded?.();
+        }
+    }, [scene, onLoaded]);
 
     return (
         <>
@@ -305,25 +380,39 @@ const SolidAssemblyScene = ({ project }) => {
  * Parts Canvas - Bottom Left quadrant
  * LIGHT THEME: White background
  */
-const PartsCanvas = ({ project, instanceId }) => {
+const PartsCanvas = ({ project, instanceId, onLoad }) => {
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        setIsLoading(true);
+    }, [instanceId]);
+
+    const handleLoaded = useCallback(() => {
+        setIsLoading(false);
+        onLoad?.();
+    }, [onLoad]);
+
     return (
-        <Canvas
-            key={instanceId}
-            style={{ width: '100%', height: '100%' }}
-            gl={{ antialias: true }}
-        >
-            <OrthographicCamera
-                makeDefault
-                position={[0, 0, 10]}
-                zoom={50}
-                near={0.1}
-                far={1000}
-            />
-            <color attach="background" args={['#f5f5f5']} />
-            <Suspense fallback={null}>
-                <PartsGridScene project={project} />
-            </Suspense>
-        </Canvas>
+        <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+            <LoadingOverlay isLoading={isLoading} />
+            <Canvas
+                key={instanceId}
+                style={{ width: '100%', height: '100%' }}
+                gl={{ antialias: true }}
+            >
+                <OrthographicCamera
+                    makeDefault
+                    position={[0, 0, 10]}
+                    zoom={50}
+                    near={0.1}
+                    far={1000}
+                />
+                <color attach="background" args={['#f5f5f5']} />
+                <Suspense fallback={null}>
+                    <PartsGridScene project={project} onLoaded={handleLoaded} />
+                </Suspense>
+            </Canvas>
+        </div>
     );
 };
 
@@ -331,25 +420,39 @@ const PartsCanvas = ({ project, instanceId }) => {
  * Assembly Canvas - Top Left quadrant
  * LIGHT THEME: White background
  */
-const AssemblyCanvas = ({ project, instanceId }) => {
+const AssemblyCanvas = ({ project, instanceId, onLoad }) => {
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        setIsLoading(true);
+    }, [instanceId]);
+
+    const handleLoaded = useCallback(() => {
+        setIsLoading(false);
+        onLoad?.();
+    }, [onLoad]);
+
     if (!project.modelPath) return null;
 
     return (
-        <Canvas
-            key={instanceId}
-            style={{ width: '100%', height: '100%' }}
-            gl={{ antialias: true }}
-        >
-            <PerspectiveCamera
-                makeDefault
-                position={[0, 3, 10]}
-                fov={45}
-            />
-            <color attach="background" args={['#f0f0f0']} />
-            <Suspense fallback={null}>
-                <SolidAssemblyScene project={project} />
-            </Suspense>
-        </Canvas>
+        <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+            <LoadingOverlay isLoading={isLoading} />
+            <Canvas
+                key={instanceId}
+                style={{ width: '100%', height: '100%' }}
+                gl={{ antialias: true }}
+            >
+                <PerspectiveCamera
+                    makeDefault
+                    position={[0, 3, 10]}
+                    fov={45}
+                />
+                <color attach="background" args={['#f0f0f0']} />
+                <Suspense fallback={null}>
+                    <SolidAssemblyScene project={project} onLoaded={handleLoaded} />
+                </Suspense>
+            </Canvas>
+        </div>
     );
 };
 
