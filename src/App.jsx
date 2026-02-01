@@ -3,7 +3,71 @@ import { WorldGrid } from './components/WorldGrid';
 import { ProjectDetailModal } from './components/ProjectDetailModal';
 import { projects } from './data/projects';
 import gsap from 'gsap';
+
 import './index.css';
+
+// Typewriter Hint Component
+const TypewriterHint = ({ active }) => {
+    const [text, setText] = useState('');
+    const [shouldType, setShouldType] = useState(false);
+    const fullText = 'Too low res? Click "More information" on the left.';
+
+    // Delay effect
+    useEffect(() => {
+        let timer;
+        if (active) {
+            // Wait 1.5 seconds for Manhattan animation to finish before typing
+            timer = setTimeout(() => setShouldType(true), 1500);
+        } else {
+            setShouldType(false);
+        }
+        return () => clearTimeout(timer);
+    }, [active]);
+
+    // Typing effect
+    useEffect(() => {
+        let timeout;
+
+        if (active && shouldType) {
+            // Typing forward
+            if (text.length < fullText.length) {
+                timeout = setTimeout(() => {
+                    setText(fullText.slice(0, text.length + 1));
+                }, 25); // Faster typing speed (was 50)
+            }
+        } else if (!active) {
+            // Typing backward (deleting)
+            if (text.length > 0) {
+                timeout = setTimeout(() => {
+                    setText(text.slice(0, text.length - 1));
+                }, 15); // Faster deleting speed
+            }
+        }
+
+        return () => clearTimeout(timeout);
+    }, [active, shouldType, text, fullText]);
+
+    if (!text && !active) return null;
+
+    return (
+        <div style={{
+            position: 'fixed',
+            left: '70%',
+            top: '75%', // Positioned under the model generally
+            transform: 'translateX(-50%)',
+            pointerEvents: 'none',
+            zIndex: 100,
+            fontFamily: 'monospace',
+            fontSize: '0.8rem',
+            color: 'rgba(0,0,0,0.5)',
+            textShadow: '0 1px 2px rgba(255,255,255,0.8)',
+            whiteSpace: 'nowrap'
+        }}>
+            {text}
+            <span style={{ opacity: (active && shouldType && text.length < fullText.length) ? 1 : 0 }} className="animate-pulse">|</span>
+        </div>
+    );
+};
 
 function App() {
     const [currentProjectIndex, setCurrentProjectIndex] = useState(-1); // -1 = no project active
@@ -13,6 +77,11 @@ function App() {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [modalProject, setModalProject] = useState(null);
     const [emailCopied, setEmailCopied] = useState(false);
+
+
+    // Hint state
+    const [hintDismissed, setHintDismissed] = useState(false);
+
     const scrollThumbRef = useRef(null);
     const headerRef = useRef(null);
     const prevViewModeRef = useRef('LANDING');
@@ -166,6 +235,8 @@ function App() {
         if (!project.details) return; // Skip projects without details
         setModalProject(project);
         setIsModalOpen(true);
+        // Dismiss hint permanently when modal opens
+        setHintDismissed(true);
     }, []);
 
     const handleCloseModal = useCallback(() => {
@@ -185,6 +256,13 @@ function App() {
         };
     }, [isModalOpen]);
 
+    // Dismiss hint logic when scrolling past first project
+    useEffect(() => {
+        if (!hintDismissed && currentProjectIndex > 0) {
+            setHintDismissed(true);
+        }
+    }, [currentProjectIndex, hintDismissed]);
+
     const isLanding = viewMode === 'LANDING';
     const isProject = viewMode === 'PROJECT';
     const showLeftPanel = isProject;
@@ -192,8 +270,18 @@ function App() {
     // Get current project from config
     const currentProject = currentProjectIndex >= 0 ? projects[currentProjectIndex] : null;
 
+    // Hint should show ONLY if:
+    // 1. Not dismissed
+    // 2. We are on the first project (index 0)
+    // 3. We are in PROJECT view mode
+    // 4. Modal is not open
+    const showHint = !hintDismissed && currentProjectIndex === 0 && viewMode === 'PROJECT' && !isModalOpen;
+
     return (
         <>
+            {/* Typewriter Hint */}
+            <TypewriterHint active={showHint} />
+
             {/* 3D MODEL VIEWER - Always 100% width, panel overlays on top */}
             <div style={{
                 position: 'fixed',
