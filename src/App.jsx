@@ -466,7 +466,7 @@ function App() {
                         textAlign: 'center', pointerEvents: 'auto', backgroundColor: 'rgba(255,255,255,0.94)',
                         padding: '4rem', backdropFilter: 'blur(12px)', border: '1px solid rgba(0,0,0,0.08)'
                     }}>
-                        <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', color: '#888', letterSpacing: '0.2em', display: 'block', marginBottom: '1rem' }}>SAY HELLO</span>
+                        <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', color: '#888', letterSpacing: '0.2em', display: 'block', marginBottom: '1rem' }}>INTERESTED?</span>
                         <h2 style={{ fontSize: '2.5rem', fontFamily: 'var(--font-header)', marginBottom: '2rem', fontWeight: 400 }}>GET IN TOUCH</h2>
                         <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem', flexWrap: 'wrap' }}>
                             <button
