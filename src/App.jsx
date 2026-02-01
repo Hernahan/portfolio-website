@@ -10,7 +10,7 @@ import './index.css';
 const TypewriterHint = ({ active }) => {
     const [text, setText] = useState('');
     const [shouldType, setShouldType] = useState(false);
-    const fullText = 'Too low res? Click "More information" on the left.';
+    const fullText = 'Too low res? Click "More Information" on the left.';
 
     // Delay effect
     useEffect(() => {
