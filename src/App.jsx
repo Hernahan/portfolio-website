@@ -394,7 +394,7 @@ function App() {
                             >{emailCopied ? 'COPIED!' : 'EMAIL'}</button>
                             <a href="https://github.com/Hernahan" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor' }}>GITHUB</a>
                             <a href="https://linkedin.com/in/asherbennett1" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor' }}>LINKEDIN</a>
-                            <a href="/Asher_Bennett_Resume (13).pdf" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor' }}>RESUME</a>
+                            <a href="/AsherBennett-Resume.pdf" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor' }}>RESUME</a>
                         </div>
 
                         <div style={{
@@ -567,7 +567,7 @@ function App() {
                             >{emailCopied ? 'COPIED!' : 'EMAIL'}</button>
                             <a href="https://github.com/Hernahan" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor', paddingBottom: '0.2em' }}>GITHUB</a>
                             <a href="https://linkedin.com/in/asherbennett1" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor', paddingBottom: '0.2em' }}>LINKEDIN</a>
-                            <a href="/Asher_Bennett_Resume (13).pdf" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor', paddingBottom: '0.2em' }}>RESUME</a>
+                            <a href="/AsherBennett-Resume.pdf" target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.85rem', fontFamily: 'monospace', color: '#000', textDecoration: 'none', borderBottom: '1px solid currentColor', paddingBottom: '0.2em' }}>RESUME</a>
                         </div>
                     </div>
                 </section>
