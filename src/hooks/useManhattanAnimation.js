@@ -1,9 +1,11 @@
 import { useFrame } from '@react-three/fiber';
 import { useRef, useEffect, useState } from 'react';
+import * as THREE from 'three';
 import { AMBIENT_SPACING } from '../components/Voxelizer';
 
 // Nearest intersection of the ambient background lattice.
 const snapToAmbient = (v) => Math.round(v / AMBIENT_SPACING) * AMBIENT_SPACING;
+const IDENTITY_QUAT = new THREE.Quaternion();
 
 // Axis order permutations for Manhattan movement
 const AXIS_ORDERS = [
@@ -15,7 +17,7 @@ const AXIS_ORDERS = [
     [2, 1, 0], // Z -> Y -> X
 ];
 
-export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode) => {
+export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode, wallQuat) => {
     const [animating, setAnimating] = useState(false);
     const animDataRef = useRef(null);
     const startTimeRef = useRef(-1);
@@ -25,6 +27,18 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
 
         const targetPoints = targetCloud.points;
         const targetNormals = targetCloud.normals;
+
+        // Entry and exit points sit on the ambient wall, which is oriented to
+        // the camera rather than to the world axes. Project into the wall's own
+        // frame to snap onto its lattice, then bring the result back out.
+        const wq = targetCloud.wallQuat || wallQuat || IDENTITY_QUAT;
+        const wqi = wq.clone().invert();
+        const tmp = new THREE.Vector3();
+        const ontoWall = (x, y, z) => {
+            tmp.set(x, y, z).applyQuaternion(wqi);
+            tmp.set(snapToAmbient(tmp.x), snapToAmbient(tmp.y), 0).applyQuaternion(wq);
+            return tmp;
+        };
 
         const geometry = meshRef.current.geometry;
         const currentPositions = geometry.attributes.position.array;
@@ -115,9 +129,8 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
                     // Now they rise out of the nearest intersection of the
                     // ambient lattice and travel to their place in the form, so
                     // the whole field visibly gathers into the object.
-                    sX = snapToAmbient(tX);
-                    sY = snapToAmbient(tY);
-                    sZ = 0;
+                    const w = ontoWall(tX, tY, tZ);
+                    sX = w.x; sY = w.y; sZ = w.z;
                     sScale = 0.0;
                     tScale = 1.0;
 
@@ -133,9 +146,8 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
                 sY = currentPositions[idx + 1];
                 sZ = currentPositions[idx + 2];
 
-                tX = snapToAmbient(sX);
-                tY = snapToAmbient(sY);
-                tZ = 0;
+                const w = ontoWall(sX, sY, sZ);
+                tX = w.x; tY = w.y; tZ = w.z;
 
                 sScale = isVisibleStart ? 1.0 : 0.0;
                 tScale = 0.0;
@@ -193,7 +205,7 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
         startTimeRef.current = -1;
         setAnimating(true);
 
-    }, [targetCloud, viewMode]);
+    }, [targetCloud, viewMode, wallQuat]);
 
     useFrame((state) => {
         if (!animating || !animDataRef.current || !meshRef.current) return;

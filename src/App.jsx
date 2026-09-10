@@ -314,7 +314,7 @@ function App() {
                 fontSize: '0.7rem', fontFamily: 'monospace', color: 'rgba(0,0,0,0.4)',
                 letterSpacing: '0.1em', textTransform: 'uppercase', zIndex: 25,
                 opacity: showLeftPanel ? 1 : 0, transition: 'opacity 0.3s ease', pointerEvents: 'none',
-            }}>⟳ Orbit + Zoom</div>
+            }}>⟳ Drag to orbit</div>
 
             {/* SCROLLABLE CONTENT */}
             <div style={{ position: 'relative', zIndex: 10, pointerEvents: 'none' }}>

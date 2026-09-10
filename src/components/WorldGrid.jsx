@@ -36,72 +36,6 @@ const ViewOffsetRig = ({ viewMode, isNarrow }) => {
     return null;
 };
 
-// Camera Rig
-const CameraRig = ({ viewMode }) => {
-    const { camera } = useThree();
-
-    useEffect(() => {
-        if (viewMode === 'LANDING' || viewMode === 'ABOUT' || viewMode === 'CONTACT') {
-            // Return square-on, and get there BEFORE the dots finish re-forming.
-            //
-            // The orbit persists while you are looking at a model, so leaving a
-            // project can start from any angle. Easing back over 1.5s meant the
-            // lattice had already assembled while the camera was still swinging,
-            // and you watched a finished flat grid rotate into place. That reads
-            // as a 2D sheet being turned to face you rather than dots settling
-            // back onto a wall. Recovering in 0.7s, front-loaded, puts the
-            // rotation underneath the dot movement where it belongs.
-            gsap.to(camera.position, {
-                x: 0, y: 0, z: 20,
-                duration: 0.75, delay: 0.15, ease: "power2.inOut", overwrite: "auto",
-            });
-        } else {
-            // Three-quarter view. Looking straight down an axis makes a
-            // cylindrical assembly read as a flat bar; a raised, rotated camera
-            // shows three faces at once and reads as an object in space. This
-            // is the angle you would choose to photograph the part.
-            gsap.to(camera.position, { x: 7.6, y: 6.2, z: 15.2, duration: 1.5, ease: "power2.inOut", overwrite: "auto" });
-        }
-    }, [viewMode, camera]);
-    return null;
-};
-
-// Custom zoom handler - only in PROJECT mode
-const ZoomController = ({ viewMode }) => {
-    const { camera, gl } = useThree();
-
-    useEffect(() => {
-        const canvas = gl.domElement;
-
-        const MIN_Z = 10, MAX_Z = 30;
-
-        const handleWheel = (e) => {
-            if (viewMode !== 'PROJECT') return;
-
-            const zoomSpeed = 0.003;
-            const delta = e.deltaY * zoomSpeed;
-            const current = camera.position.z;
-            const newZ = Math.max(MIN_Z, Math.min(MAX_Z, current + delta * 8));
-
-            // Hand the wheel back to the page once the zoom is against its
-            // limit. The canvas is fixed and full-screen, so unconditionally
-            // swallowing wheel events trapped anyone whose cursor was over the
-            // model: the page simply would not scroll and there was no way to
-            // reach the next project without moving the mouse to the text.
-            if (Math.abs(newZ - current) < 0.0001) return;
-
-            e.preventDefault();
-            e.stopPropagation();
-            gsap.to(camera.position, { z: newZ, duration: 0.15, ease: "power1.out" });
-        };
-
-        canvas.addEventListener('wheel', handleWheel, { passive: false });
-        return () => canvas.removeEventListener('wheel', handleWheel);
-    }, [camera, gl, viewMode]);
-
-    return null;
-};
-
 /**
  * Processes loaded GLTF and updates cache
  */
@@ -240,14 +174,30 @@ const DotMaterial = () => {
 
 const GridParticles = ({ currentProject, viewMode, onAnimationComplete, allProjects }) => {
     const meshRef = useRef();
+    const { camera } = useThree();
     const [pointsCache, setPointsCache] = useState({});
 
     // Built-in shapes (always available)
     const shapes = useMemo(() => ({
-        plane: generatePlanePoints({ width: 64, height: 34, spacing: AMBIENT_SPACING }),
         cube: generateCubePoints({ gridSize: [8, 8, 8], spacing: 0.18 }),
         sphere: generateSpherePoints({ radius: 3.5, spacing: 0.115 })
     }), []);
+
+    // The ambient wall, rebuilt square to the camera each time we return to it.
+    //
+    // Orbiting a model turns the camera, so a wall pinned to world axes would
+    // be seen at an angle afterwards and would have to rotate itself flat while
+    // you watched. Rebuilding it in the camera's frame means it is already
+    // square: dots travel to it and from it, and it never turns.
+    const makeWall = useCallback(() => generatePlanePoints({
+        width: 64, height: 34, spacing: AMBIENT_SPACING, quat: camera.quaternion,
+    }), [camera]);
+
+    const [wall, setWall] = useState(makeWall);
+
+    useEffect(() => {
+        if (viewMode !== 'PROJECT') setWall(makeWall());
+    }, [viewMode, makeWall]);
 
     // Callback to cache points when loaded
     const handleCached = useCallback((id, points) => {
@@ -289,14 +239,14 @@ const GridParticles = ({ currentProject, viewMode, onAnimationComplete, allProje
             return null;
         }
 
-        // Non-PROJECT mode: always plane
-        return shapes.plane;
-    }, [viewMode, currentProject, pointsCache, shapes]);
+        // Non-PROJECT mode: the ambient wall.
+        return wall;
+    }, [viewMode, currentProject, pointsCache, wall]);
 
     // Remember the last valid cloud so a model that is still loading does not
     // blank the field. Held in state rather than a ref because reading a ref
     // during render is not safe under concurrent rendering.
-    const [lastCloud, setLastCloud] = useState(shapes.plane);
+    const [lastCloud, setLastCloud] = useState(wall);
 
     useEffect(() => {
         if (targetCloud !== null) setLastCloud(targetCloud);
@@ -311,7 +261,7 @@ const GridParticles = ({ currentProject, viewMode, onAnimationComplete, allProje
         const positions = new Float32Array(POINT_POOL_SIZE * 3);
         const normals = new Float32Array(POINT_POOL_SIZE * 3);
         const scales = new Float32Array(POINT_POOL_SIZE);
-        const start = shapes.plane;
+        const start = wall;
         for (let i = 0; i < POINT_POOL_SIZE; i++) {
             const p = start.points[i];
             const n = start.normals[i];
@@ -325,13 +275,15 @@ const GridParticles = ({ currentProject, viewMode, onAnimationComplete, allProje
             }
         }
         return { positions, normals, scales };
-    }, [shapes]);
+        // Only the very first frame uses this; later states come from the morph.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Models are voxelised into a fixed world-space frame. A portrait phone
     // viewport is far narrower than that frame, so without this the assembly
     // simply ran off both edges. Scaling the whole cloud is cheaper and more
     // stable than re-voxelising per breakpoint.
-    const { size: canvasSize, camera } = useThree();
+    const { size: canvasSize } = useThree();
     const fitScale = useMemo(() => {
         if (viewMode !== 'PROJECT') return 1;
         const aspect = canvasSize.width / Math.max(1, canvasSize.height);
@@ -340,7 +292,7 @@ const GridParticles = ({ currentProject, viewMode, onAnimationComplete, allProje
         return Math.min(1, visibleWidth / (MODEL_FRAME_WIDTH * 1.25));
     }, [viewMode, canvasSize.width, canvasSize.height, camera]);
 
-    useManhattanAnimation(meshRef, animationTarget, onAnimationComplete, viewMode);
+    useManhattanAnimation(meshRef, animationTarget, onAnimationComplete, viewMode, wall.wallQuat);
 
     return (
         <>
@@ -366,20 +318,36 @@ const GridParticles = ({ currentProject, viewMode, onAnimationComplete, allProje
     );
 };
 
+/**
+ * The camera here is a fixed observer. It is never animated and never dollied:
+ * models present themselves through a rotation baked into their point clouds,
+ * and the ambient wall is built square to the current view. Anything that moves
+ * the camera on its own reintroduces the wall rotation this design exists to
+ * avoid.
+ */
 export const WorldGrid = ({ currentProject = null, viewMode = 'LANDING', onAnimationComplete, allProjects = [], isNarrow = false }) => {
     return (
         <Canvas camera={{ position: [0, 0, 20], fov: 45 }}>
             <color attach="background" args={['#FFFFFF']} />
             <ViewOffsetRig viewMode={viewMode} isNarrow={isNarrow} />
-            <CameraRig viewMode={viewMode} />
             <GridParticles
                 currentProject={currentProject}
                 viewMode={viewMode}
                 onAnimationComplete={onAnimationComplete}
                 allProjects={allProjects}
             />
-            <ZoomController viewMode={viewMode} />
-            <OrbitControls enablePan={false} enableZoom={false} enableRotate={viewMode === 'PROJECT'} />
+            <OrbitControls
+                enablePan={false}
+                enableZoom={false}
+                enableRotate={viewMode === 'PROJECT'}
+                rotateSpeed={0.6}
+                // drei enables damping by default, so the camera coasts for a
+                // second or so after you let go of a drag. That coast is
+                // camera rotation with no input behind it, and the ambient wall
+                // would follow it. The camera must come to rest the instant the
+                // drag ends.
+                enableDamping={false}
+            />
         </Canvas>
     );
 };

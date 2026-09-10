@@ -22,6 +22,28 @@ export const AMBIENT_SPACING = 0.62;
 /** World-space width every model is fitted into. */
 export const MODEL_FRAME_WIDTH = 10.6;
 
+/**
+ * Three-quarter presentation, baked into the model rather than staged with the
+ * camera.
+ *
+ * The camera used to swing to an angle to present each model. That works right
+ * up until you orbit one: the ambient wall is only perpendicular to the view
+ * while the camera is where it started, so returning to it meant watching a
+ * flat lattice rotate itself square. Rotating the MODEL instead lets the camera
+ * stay a fixed observer, which is the only way the wall can be genuinely static.
+ *
+ * The rotation is the inverse of the camera placement it replaces, so models
+ * present at exactly the angle they did before.
+ */
+const PRESENTATION_QUAT = (() => {
+    const m = new THREE.Matrix4().lookAt(
+        new THREE.Vector3(7.6, 6.2, 15.2),
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 1, 0)
+    );
+    return new THREE.Quaternion().setFromRotationMatrix(m).invert();
+})();
+
 /** Default number of dots used to represent a model. */
 export const MODEL_POINT_BUDGET = 12000;
 
@@ -140,7 +162,16 @@ export const generateSpherePoints = ({ radius = 5, spacing = 0.5 }) => {
     return sortSpatially({ points, normals });
 };
 
-export const generatePlanePoints = ({ width = 50, height = 30, spacing = 1.0 }) => {
+/**
+ * The ambient wall.
+ *
+ * `quat` orients the wall to face the viewer. The wall is meant to read as a
+ * fixed surface that dots leave and return to, so it is built square to
+ * whatever direction the camera is currently looking from rather than being
+ * pinned to world axes. Pinned to world axes it appears tilted after you have
+ * orbited a model, and squaring it up again is a visible rotation.
+ */
+export const generatePlanePoints = ({ width = 50, height = 30, spacing = 1.0, quat = null }) => {
     const points = [];
     const normals = [];
     const xCount = Math.floor(width / spacing);
@@ -149,15 +180,22 @@ export const generatePlanePoints = ({ width = 50, height = 30, spacing = 1.0 }) 
     const yOffset = -(yCount * spacing) / 2;
     for (let x = 0; x < xCount; x++) {
         for (let y = 0; y < yCount; y++) {
-            points.push(new THREE.Vector3(xOffset + x * spacing, yOffset + y * spacing, 0));
-            normals.push(new THREE.Vector3(0, 0, 1));
+            const p = new THREE.Vector3(xOffset + x * spacing, yOffset + y * spacing, 0);
+            const n = new THREE.Vector3(0, 0, 1);
+            if (quat) { p.applyQuaternion(quat); n.applyQuaternion(quat); }
+            points.push(p);
+            normals.push(n);
         }
     }
     // Z-order, like every other cloud. Index correspondence is what keeps a
     // dot's journey short: slot i in the ambient field and slot i in a model
     // land in comparable regions of their own bounds, so dots drift into place
     // instead of crossing the whole composition to reach an unrelated target.
-    return sortSpatially({ points, normals });
+    const cloud = sortSpatially({ points, normals });
+    // Carried so the morph can snap entry and exit points onto this same
+    // surface rather than assuming the wall lies on the world XY plane.
+    cloud.wallQuat = quat ? quat.clone() : new THREE.Quaternion();
+    return cloud;
 };
 
 /**
@@ -230,6 +268,7 @@ export const generateMeshPoints = (geometry, {
     fitHeight = 6.2,
     jitter = 0.34,
     shellOnly = true,
+    present = true,
 } = {}) => {
     const EMPTY = { points: [], normals: [] };
     if (!geometry) return EMPTY;
@@ -431,6 +470,11 @@ export const generateMeshPoints = (geometry, {
     if (box.x > 1e-6 && box.y > 1e-6) {
         const s = Math.min(fitWidth / box.x, fitHeight / box.y) * scale;
         oriented.points.forEach((p) => p.multiplyScalar(s));
+    }
+
+    if (present) {
+        oriented.points.forEach((p) => p.applyQuaternion(PRESENTATION_QUAT));
+        oriented.normals.forEach((n) => n.applyQuaternion(PRESENTATION_QUAT));
     }
 
     return sortSpatially(oriented);
