@@ -1,6 +1,6 @@
 import React, { useRef, useState, Suspense, useEffect, useMemo, useCallback } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, Html, useGLTF } from '@react-three/drei';
+import { Html, OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import gsap from 'gsap';
 
@@ -140,6 +140,27 @@ const fitToBox = (object, targetSize) => {
     };
 };
 
+// A matte near-black finish reads as black without relying on glossy
+// reflections; the directional lights reveal shape through diffuse falloff.
+const createModalCadMaterial = () => new THREE.MeshStandardMaterial({
+    color: '#171717',
+    metalness: 0,
+    roughness: 0.9,
+    // CAD exports routinely carry inconsistent triangle winding.
+    side: THREE.DoubleSide,
+});
+
+// A simple three-point rig provides enough directional contrast for detail
+// while preserving the deliberately matte finish.
+const ModalLighting = () => (
+    <>
+        <ambientLight intensity={0.45} />
+        <directionalLight position={[6, 8, 10]} intensity={3.2} />
+        <directionalLight position={[-7, 3, 6]} intensity={1.3} />
+        <directionalLight position={[-3, -5, 5]} intensity={0.8} />
+    </>
+);
+
 /**
  * Calculate grid layout for N parts
  */
@@ -154,14 +175,9 @@ const calculateGrid = (partCount) => {
  * Individual Part Component for Grid Layout
  * LIGHT THEME: Dark models on white background
  */
-const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover, onLoaded, spinRef }) => {
+const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover, onLoaded }) => {
     const [hovered, setHovered] = useState(false);
     const meshRef = useRef();
-    const spinGroup = useRef();
-
-    useFrame(() => {
-        if (spinGroup.current && spinRef) spinGroup.current.rotation.y = spinRef.current;
-    });
 
     const { scene } = useGLTF(partUrl);
 
@@ -169,22 +185,7 @@ const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover,
         const clone = scene.clone();
         clone.traverse((child) => {
             if (child.isMesh) {
-                // Dark gray material for light theme
-                // A metallic material with no environment map has nothing to
-                // reflect, so it renders almost black and the part reads as a
-                // flat silhouette. Non-metallic mid-grey lets the directional
-                // lights describe the actual form.
-                child.material = new THREE.MeshStandardMaterial({
-                    color: '#9a9a9a',
-                    metalness: 0.0,
-                    roughness: 0.62,
-                    // CAD exports routinely carry inconsistent triangle
-                    // winding. With single-sided material the assembly was
-                    // drawn every frame and then entirely back-face culled,
-                    // so the panel rendered empty while the draw call and its
-                    // 108k triangles still showed up in the renderer stats.
-                    side: THREE.DoubleSide,
-                });
+                child.material = createModalCadMaterial();
             }
         });
 
@@ -220,13 +221,9 @@ const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover,
             onPointerOver={handlePointerOver}
             onPointerOut={handlePointerOut}
         >
-            {/* Tilted slightly so each component reads as a solid rather than
-              * a flat elevation, then spun about its own vertical axis. */}
-            <group ref={spinGroup} rotation={[0.32, 0, 0]}>
-                <group scale={scale}>
-                    <group position={[-center.x, -center.y, -center.z]}>
-                        <primitive object={clonedScene} />
-                    </group>
+            <group scale={scale}>
+                <group position={[-center.x, -center.y, -center.z]}>
+                    <primitive object={clonedScene} />
                 </group>
             </group>
 
@@ -270,12 +267,9 @@ const EMPTY_PARTS = [];
 const PartsGridScene = ({ project, onLoaded }) => {
     const { viewport, gl } = useThree();
     const groupRef = useRef();
-    // Shared spin angle, applied to each part about its OWN axis.
-    //
-    // Rotating the containing group instead turned the whole grid in 3D. Under
-    // an orthographic camera that collapses the columns towards each other as
-    // the angle approaches 90 degrees, which is why the parts kept piling up on
-    // top of one another instead of sitting in a tidy 3 x 2 grid.
+    // One shared angle rotates the entire exploded layout around its central
+    // vertical axis. Drag input is deliberately horizontal-only: no vertical
+    // or z-axis rotation is introduced.
     const spinRef = useRef(0.6);
     const isDragging = useRef(false);
     const lastX = useRef(0);
@@ -327,6 +321,7 @@ const PartsGridScene = ({ project, onLoaded }) => {
         if (!isDragging.current && !shouldPause) {
             spinRef.current += delta * 0.15;
         }
+        if (groupRef.current) groupRef.current.rotation.set(0, spinRef.current, 0);
     });
 
     const handlePartHover = useCallback((hovering) => {
@@ -382,10 +377,7 @@ const PartsGridScene = ({ project, onLoaded }) => {
 
     return (
         <>
-            {/* Lighting for light theme */}
-            <ambientLight intensity={1.2} />
-            <directionalLight position={[5, 5, 5]} intensity={0.8} />
-            <directionalLight position={[-5, -5, -5]} intensity={0.4} />
+            <ModalLighting />
 
             <group ref={groupRef}>
                 {parts.map((part, index) => {
@@ -400,7 +392,6 @@ const PartsGridScene = ({ project, onLoaded }) => {
                                 description={part.description}
                                 onHover={handlePartHover}
                                 onLoaded={handlePartLoaded}
-                                spinRef={spinRef}
                             />
                         </Suspense>
                     );
@@ -421,21 +412,7 @@ const SolidAssemblyScene = ({ project, onLoaded }) => {
         const clone = scene.clone();
         clone.traverse((child) => {
             if (child.isMesh) {
-                // A metallic material with no environment map has nothing to
-                // reflect, so it renders almost black and the part reads as a
-                // flat silhouette. Non-metallic mid-grey lets the directional
-                // lights describe the actual form.
-                child.material = new THREE.MeshStandardMaterial({
-                    color: '#9a9a9a',
-                    metalness: 0.0,
-                    roughness: 0.62,
-                    // CAD exports routinely carry inconsistent triangle
-                    // winding. With single-sided material the assembly was
-                    // drawn every frame and then entirely back-face culled,
-                    // so the panel rendered empty while the draw call and its
-                    // 108k triangles still showed up in the renderer stats.
-                    side: THREE.DoubleSide,
-                });
+                child.material = createModalCadMaterial();
             }
         });
         // Percentile bounds over sampled vertices. Thin features carry few
@@ -470,11 +447,7 @@ const SolidAssemblyScene = ({ project, onLoaded }) => {
 
     return (
         <>
-            {/* Lighting for light theme */}
-            <ambientLight intensity={1.2} />
-            <directionalLight position={[10, 10, 5]} intensity={0.8} />
-            <directionalLight position={[-5, 5, -5]} intensity={0.5} />
-            <directionalLight position={[0, -5, 0]} intensity={0.3} />
+            <ModalLighting />
 
             {/*
               * Framing is delegated to Bounds rather than scaling the model to
@@ -952,8 +925,8 @@ const DescriptionPanel = ({ project }) => {
                                 key={tag}
                                 style={{
                                     padding: '0.3rem 0.6rem',
-                                    background: '#000',
-                                    color: '#fff',
+                                    background: '#f0f0f0',
+                                    color: '#000',
                                     fontSize: '0.6rem',
                                     fontFamily: 'monospace',
                                     borderRadius: '2px',
@@ -1111,7 +1084,7 @@ export const ProjectDetailModal = ({ project, onClose, isOpen }) => {
                             fontSize: '0.55rem',
                             letterSpacing: '0.15em',
                         }}>
-                            COMPONENTS • DRAG TO SPIN • HOVER FOR DETAILS
+                            COMPONENTS • HORIZONTAL DRAG TO SPIN • HOVER FOR DETAILS
                         </div>
                         <PartsCanvas project={project} instanceId={`parts-${project.id}-${instanceId}`} />
                     </div>

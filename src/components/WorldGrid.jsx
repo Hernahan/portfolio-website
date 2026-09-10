@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useEffect, useState, useCallback } from 'react';
+import React, { useMemo, useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
@@ -34,6 +34,43 @@ const ViewOffsetRig = ({ viewMode, isNarrow }) => {
     });
 
     return null;
+};
+
+/**
+ * Lets a project carry a little momentum after an orbit drag without allowing
+ * that momentum to leak into the ambient wall. The wall is generated in the
+ * current camera frame, so its orientation must be sampled only after any
+ * outstanding project-view velocity has been discarded.
+ */
+const ProjectOrbitControls = ({ viewMode }) => {
+    const controlsRef = useRef();
+    const isProject = viewMode === 'PROJECT';
+
+    useLayoutEffect(() => {
+        if (isProject || !controlsRef.current) return;
+
+        // OrbitControls keeps its inertial rotation in these internal values.
+        // Clear them before GridParticles' wall-rebuild effect runs: preserving
+        // the current camera angle is intentional, while a post-scroll coast
+        // would make the wall appear to rotate beneath the viewer.
+        const controls = controlsRef.current;
+        controls._sphericalDelta?.set(0, 0, 0);
+        controls._panOffset?.set(0, 0, 0);
+        controls._scale = 1;
+    }, [isProject]);
+
+    return (
+        <OrbitControls
+            ref={controlsRef}
+            enabled={isProject}
+            enablePan={false}
+            enableZoom={false}
+            enableRotate={isProject}
+            rotateSpeed={0.6}
+            enableDamping={isProject}
+            dampingFactor={0.05}
+        />
+    );
 };
 
 /**
@@ -336,18 +373,7 @@ export const WorldGrid = ({ currentProject = null, viewMode = 'LANDING', onAnima
                 onAnimationComplete={onAnimationComplete}
                 allProjects={allProjects}
             />
-            <OrbitControls
-                enablePan={false}
-                enableZoom={false}
-                enableRotate={viewMode === 'PROJECT'}
-                rotateSpeed={0.6}
-                // drei enables damping by default, so the camera coasts for a
-                // second or so after you let go of a drag. That coast is
-                // camera rotation with no input behind it, and the ambient wall
-                // would follow it. The camera must come to rest the instant the
-                // drag ends.
-                enableDamping={false}
-            />
+            <ProjectOrbitControls viewMode={viewMode} />
         </Canvas>
     );
 };

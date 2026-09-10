@@ -233,16 +233,8 @@ function App() {
     // Get current project from config
     const currentProject = currentProjectIndex >= 0 ? projects[currentProjectIndex] : null;
 
-    // Hint should show ONLY if:
-    // 1. Not dismissed
-    // 2. We are on the first project (index 0)
-    // 3. We are in PROJECT view mode
-    // 4. Modal is not open
-
     return (
         <>
-            {/* Typewriter Hint */}
-
             {/* 3D MODEL VIEWER - Always 100% width, panel overlays on top */}
             <div style={{
                 position: 'fixed',
@@ -300,21 +292,6 @@ function App() {
                     }}
                 />
             </div>
-
-            {/* ZONE LABELS */}
-            <div style={{
-                position: 'fixed', bottom: '1.5rem', left: '1.5rem',
-                fontSize: '0.7rem', fontFamily: 'monospace', color: 'rgba(0,0,0,0.4)',
-                letterSpacing: '0.1em', textTransform: 'uppercase', zIndex: 25,
-                opacity: showLeftPanel ? 1 : 0, transition: 'opacity 0.3s ease', pointerEvents: 'none',
-            }}>↕ Scroll</div>
-
-            <div style={{
-                position: 'fixed', bottom: '1.5rem', right: '1.5rem',
-                fontSize: '0.7rem', fontFamily: 'monospace', color: 'rgba(0,0,0,0.4)',
-                letterSpacing: '0.1em', textTransform: 'uppercase', zIndex: 25,
-                opacity: showLeftPanel ? 1 : 0, transition: 'opacity 0.3s ease', pointerEvents: 'none',
-            }}>⟳ Drag to orbit</div>
 
             {/* SCROLLABLE CONTENT */}
             <div style={{ position: 'relative', zIndex: 10, pointerEvents: 'none' }}>
@@ -398,15 +375,6 @@ function App() {
                         padding: '3rem 4rem',
                         border: '1px solid rgba(0,0,0,0.08)',
                     }}>
-                        <span style={{
-                            fontFamily: 'monospace',
-                            fontSize: '0.65rem',
-                            color: '#888',
-                            letterSpacing: '0.2em',
-                            display: 'block',
-                            marginBottom: '0.75rem',
-                        }}>01 // INTRODUCTION</span>
-
                         <h2 style={{
                             fontSize: '2.5rem',
                             fontFamily: 'var(--font-header)',
@@ -423,7 +391,7 @@ function App() {
                             color: '#333',
                             marginBottom: '1.5rem',
                         }}>
-                            Second-year Mechanical Engineering student at <strong>UMass Amherst</strong> passionate about <em style={{ textDecoration: 'underline' }}>humanoid robotics</em> and <em style={{ textDecoration: 'underline' }}>aerospace</em>. Currently developing a humanoid hand as an interest-based challenge project.
+                            Third-year Mechanical Engineering student at UMass Amherst passionate about thermal, hardware, and manufacturing engineering. Currently working at <a href="https://www.werfen.com/" target="_blank" rel="noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>Werfen (instrumentation lab)</a> as a hardware systems engineer.
                         </p>
 
                         <p style={{
@@ -433,7 +401,7 @@ function App() {
                             color: '#333',
                             marginBottom: '1.5rem',
                         }}>
-                            I focus on hands-on prototyping to gain the technical skills needed to move a project from a design to a finished, working system.
+                            I enjoy working on hardware &amp; low-level software.
                         </p>
 
                         <div style={{
@@ -443,16 +411,17 @@ function App() {
                             flexWrap: 'wrap',
                             marginTop: '2rem',
                         }}>
-                            <span style={{ padding: '0.3rem 0.6rem', background: '#000', color: '#fff', fontSize: '0.6rem', fontFamily: 'monospace' }}>CAD</span>
+                            <span style={{ padding: '0.3rem 0.6rem', background: '#f0f0f0', color: '#000', fontSize: '0.6rem', fontFamily: 'monospace' }}>CAD</span>
                             <span style={{ padding: '0.3rem 0.6rem', background: '#f0f0f0', color: '#000', fontSize: '0.6rem', fontFamily: 'monospace' }}>3D PRINTING</span>
                             <span style={{ padding: '0.3rem 0.6rem', background: '#f0f0f0', color: '#000', fontSize: '0.6rem', fontFamily: 'monospace' }}>SIMULATION</span>
-                            <span style={{ padding: '0.3rem 0.6rem', background: '#f0f0f0', color: '#000', fontSize: '0.6rem', fontFamily: 'monospace' }}>ELECTRONICS</span>
+                            <span style={{ padding: '0.3rem 0.6rem', background: '#f0f0f0', color: '#000', fontSize: '0.6rem', fontFamily: 'monospace' }}>MECHATRONICS</span>
+                            <span style={{ padding: '0.3rem 0.6rem', background: '#f0f0f0', color: '#000', fontSize: '0.6rem', fontFamily: 'monospace' }}>FPGA</span>
                         </div>
                     </div>
                 </section>
 
                 {/* === DYNAMIC PROJECT SECTIONS === */}
-                {projects.map((project, index) => (
+                {projects.map((project) => (
                     <section
                         key={project.id}
                         style={{
@@ -468,9 +437,6 @@ function App() {
                             pointerEvents: 'auto',
                             backdropFilter: 'blur(12px)', border: '1px solid rgba(0,0,0,0.08)', boxShadow: '0 4px 30px rgba(0,0,0,0.04)',
                         }}>
-                            <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', color: '#888', letterSpacing: '0.15em' }}>
-                                PROJECT_{String(index + 1).padStart(2, '0')}
-                            </span>
                             <h3 style={{ fontSize: '1.5rem', fontFamily: 'var(--font-header)', margin: '0.5rem 0 0.75rem', fontWeight: 400 }}>
                                 {project.title}
                             </h3>
@@ -478,13 +444,13 @@ function App() {
                                 {project.description}
                             </p>
                             <div style={{ marginTop: '1.25rem', display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-                                {project.tags.map((tag, tagIndex) => (
+                                {project.tags.map((tag) => (
                                     <span
                                         key={tag}
                                         style={{
                                             padding: '0.2rem 0.4rem',
-                                            background: tagIndex === 0 ? '#000' : '#f0f0f0',
-                                            color: tagIndex === 0 ? '#fff' : '#000',
+                                            background: '#f0f0f0',
+                                            color: '#000',
                                             fontSize: '0.6rem',
                                             fontFamily: 'monospace'
                                         }}
@@ -532,7 +498,6 @@ function App() {
                         textAlign: 'center', pointerEvents: 'auto', backgroundColor: 'rgba(255,255,255,0.94)',
                         padding: '4rem', backdropFilter: 'blur(12px)', border: '1px solid rgba(0,0,0,0.08)'
                     }}>
-                        <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', color: '#888', letterSpacing: '0.2em', display: 'block', marginBottom: '1rem' }}>INTERESTED?</span>
                         <h2 style={{ fontSize: '2.5rem', fontFamily: 'var(--font-header)', marginBottom: '2rem', fontWeight: 400 }}>GET IN TOUCH</h2>
                         <div style={{ display: 'flex', justifyContent: 'center', gap: '2rem', flexWrap: 'wrap' }}>
                             <button
