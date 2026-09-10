@@ -15,11 +15,10 @@ const AXIS_ORDERS = [
     [2, 1, 0], // Z -> Y -> X
 ];
 
-export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode, facingRef) => {
+export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode) => {
     const [animating, setAnimating] = useState(false);
     const animDataRef = useRef(null);
     const startTimeRef = useRef(-1);
-    const spanRef = useRef(1);
 
     useEffect(() => {
         if (!meshRef.current || !targetCloud || !targetCloud.points) return;
@@ -35,21 +34,22 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
         // Process ALL particles to handle entrances and exits.
         const totalCount = currentPositions.length / 3;
 
-        // Surface orientation is adopted immediately rather than interpolated.
-        // Dots are in flight during the morph, so nobody can perceive the
-        // shading being "early", and this keeps the per-frame loop to position
-        // and scale only.
-        for (let i = 0; i < targetCount && i < totalCount; i++) {
-            const n = targetNormals[i];
-            currentNormals[i * 3] = n.x;
-            currentNormals[i * 3 + 1] = n.y;
-            currentNormals[i * 3 + 2] = n.z;
-        }
-        geometry.attributes.aNormal.needsUpdate = true;
-
-        // Data layout per particle (13 floats):
-        // [sX, sY, sZ, tX, tY, tZ, delay, stepDur, ax0, ax1, ax2, startScale, targetScale]
-        const data = new Float32Array(totalCount * 13);
+        // Data layout per particle (19 floats):
+        // [sX,sY,sZ, tX,tY,tZ, delay, stepDur, ax0,ax1,ax2, startScale,targetScale,
+        //  startNx,startNy,startNz, targetNx,targetNy,targetNz]
+        //
+        // Surface orientation travels WITH each dot rather than being stamped
+        // on up front. The previous version wrote every target normal at the
+        // instant the morph began and compensated with a global switch that
+        // disabled the facing cull for the duration. That switch was the cause
+        // of two visible artefacts: the outgoing model flashed dark the moment
+        // a transition was queued, because every back-facing dot it had been
+        // hiding was suddenly drawn at full weight; and the new model then
+        // appeared to shrink as the cull faded back in and trimmed its rim.
+        // Interpolating per dot means shading resolves as each dot arrives,
+        // staggered across the morph, with nothing global to snap.
+        const STRIDE = 19;
+        const data = new Float32Array(totalCount * STRIDE);
 
         // Pre-calculate center of TARGETS for stagger.
         let centerX = 0, centerY = 0, centerZ = 0;
@@ -83,7 +83,7 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
 
         for (let i = 0; i < totalCount; i++) {
             const idx = i * 3;
-            const dIdx = i * 13;
+            const dIdx = i * STRIDE;
             const isVisibleStart = currentScales[i] > 0.5;
             const isVisibleEnd = i < targetCount;
 
@@ -170,18 +170,25 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
 
             data[dIdx + 11] = sScale;
             data[dIdx + 12] = tScale;
+
+            // Orientation endpoints. A dot that is entering has no meaningful
+            // previous orientation, so it simply fades in already facing the
+            // right way; a dot that is leaving keeps the one it has.
+            const tn = isVisibleEnd ? targetNormals[i] : null;
+            const cnx = currentNormals[idx], cny = currentNormals[idx + 1], cnz = currentNormals[idx + 2];
+            const hasCurrent = (cnx * cnx + cny * cny + cnz * cnz) > 1e-6;
+
+            if (tn && (!isVisibleStart || !hasCurrent)) {
+                data[dIdx + 13] = tn.x; data[dIdx + 14] = tn.y; data[dIdx + 15] = tn.z;
+                data[dIdx + 16] = tn.x; data[dIdx + 17] = tn.y; data[dIdx + 18] = tn.z;
+            } else {
+                data[dIdx + 13] = cnx; data[dIdx + 14] = cny; data[dIdx + 15] = cnz;
+                data[dIdx + 16] = tn ? tn.x : cnx;
+                data[dIdx + 17] = tn ? tn.y : cny;
+                data[dIdx + 18] = tn ? tn.z : cnz;
+            }
         }
 
-        // Longest delay + travel time, so the shader knows when the cloud has
-        // finished arriving and the facing cull can be brought back in.
-        let span = 0;
-        for (let i = 0; i < totalCount; i++) {
-            const end = data[i * 13 + 6] + data[i * 13 + 7] * 3;
-            if (end > span) span = end;
-        }
-        spanRef.current = Math.max(0.001, span);
-
-        if (facingRef) facingRef.current = 0;
         animDataRef.current = data;
         startTimeRef.current = -1;
         setAnimating(true);
@@ -200,7 +207,9 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
         const geometry = meshRef.current.geometry;
         const positions = geometry.attributes.position.array;
         const scales = geometry.attributes.aScale.array;
-        const count = data.length / 13;
+        const normals = geometry.attributes.aNormal.array;
+        const STRIDE = 19;
+        const count = data.length / STRIDE;
 
         let active = false;
         const ease = (t) => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
@@ -208,7 +217,7 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
         const smoothStep = (t) => t * t * (3 - 2 * t);
 
         for (let i = 0; i < count; i++) {
-            const dIdx = i * 13;
+            const dIdx = i * STRIDE;
             const idx = i * 3;
             const delay = data[dIdx + 6];
             const stepDur = data[dIdx + 7]; // For movement
@@ -218,12 +227,17 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
             let t = elapsed - delay;
 
             if (t < 0) {
-                // Before animation starts
+                // Waiting to depart: hold the orientation it already had, so a
+                // queued transition produces no visible change until this dot
+                // actually starts moving.
                 active = true;
                 positions[idx] = data[dIdx];
                 positions[idx + 1] = data[dIdx + 1];
                 positions[idx + 2] = data[dIdx + 2];
                 scales[i] = data[dIdx + 11];
+                normals[idx] = data[dIdx + 13];
+                normals[idx + 1] = data[dIdx + 14];
+                normals[idx + 2] = data[dIdx + 15];
                 continue;
             }
 
@@ -234,11 +248,14 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
             const axisOrder = [data[dIdx + 8], data[dIdx + 9], data[dIdx + 10]];
 
             if (t >= totalDur) {
-                // Finished
+                // Arrived.
                 positions[idx] = target[0];
                 positions[idx + 1] = target[1];
                 positions[idx + 2] = target[2];
                 scales[i] = data[dIdx + 12];
+                normals[idx] = data[dIdx + 16];
+                normals[idx + 1] = data[dIdx + 17];
+                normals[idx + 2] = data[dIdx + 18];
                 continue;
             }
 
@@ -267,22 +284,27 @@ export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode
             // briefly empty mid-transition.
             const scaleProgress = Math.min(1, t / (totalDur * 0.5));
             scales[i] = sScale + (tScale - sScale) * smoothStep(scaleProgress);
+
+            // ORIENTATION: rotate from the surface it belonged to towards the
+            // one it is joining, over its own flight.
+            const nk = smoothStep(Math.min(1, t / totalDur));
+            let nx = data[dIdx + 13] + (data[dIdx + 16] - data[dIdx + 13]) * nk;
+            let ny = data[dIdx + 14] + (data[dIdx + 17] - data[dIdx + 14]) * nk;
+            let nz = data[dIdx + 15] + (data[dIdx + 18] - data[dIdx + 15]) * nk;
+            const nl = Math.sqrt(nx * nx + ny * ny + nz * nz);
+            if (nl > 1e-5) { nx /= nl; ny /= nl; nz /= nl; }
+            normals[idx] = nx;
+            normals[idx + 1] = ny;
+            normals[idx + 2] = nz;
         }
 
         geometry.attributes.position.needsUpdate = true;
         geometry.attributes.aScale.needsUpdate = true;
-
-        if (facingRef) {
-            // Resolve the surface over the back half of the morph.
-            const p = elapsed / spanRef.current;
-            const f = Math.min(1, Math.max(0, (p - 0.45) / 0.55));
-            facingRef.current = f * f * (3 - 2 * f);
-        }
+        geometry.attributes.aNormal.needsUpdate = true;
 
         if (!active) {
             setAnimating(false);
             startTimeRef.current = -1;
-            if (facingRef) facingRef.current = 1;
             if (onComplete) onComplete();
         }
     });

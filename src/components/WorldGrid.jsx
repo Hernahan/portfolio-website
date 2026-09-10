@@ -19,8 +19,11 @@ const ViewOffsetRig = ({ viewMode, isNarrow }) => {
         gsap.to(offsetRef.current, {
             x: isProject && !isNarrow ? -0.2 : 0,
             y: isProject && isNarrow ? 0.17 : 0,
-            duration: 1.5,
-            ease: "power2.inOut"
+            // Matches the camera: unhurried on the way in, decisive on the way
+            // out, so the lens is back to centre before the wall re-forms.
+            duration: isProject ? 1.5 : 0.75,
+            delay: isProject ? 0 : 0.15,
+            ease: "power2.inOut",
         });
     }, [viewMode, isNarrow]);
 
@@ -39,14 +42,25 @@ const CameraRig = ({ viewMode }) => {
 
     useEffect(() => {
         if (viewMode === 'LANDING' || viewMode === 'ABOUT' || viewMode === 'CONTACT') {
-            // Square-on, so the ambient field reads as a flat lattice.
-            gsap.to(camera.position, { x: 0, y: 0, z: 20, duration: 1.5, ease: "power2.inOut" });
+            // Return square-on, and get there BEFORE the dots finish re-forming.
+            //
+            // The orbit persists while you are looking at a model, so leaving a
+            // project can start from any angle. Easing back over 1.5s meant the
+            // lattice had already assembled while the camera was still swinging,
+            // and you watched a finished flat grid rotate into place. That reads
+            // as a 2D sheet being turned to face you rather than dots settling
+            // back onto a wall. Recovering in 0.7s, front-loaded, puts the
+            // rotation underneath the dot movement where it belongs.
+            gsap.to(camera.position, {
+                x: 0, y: 0, z: 20,
+                duration: 0.75, delay: 0.15, ease: "power2.inOut", overwrite: "auto",
+            });
         } else {
             // Three-quarter view. Looking straight down an axis makes a
             // cylindrical assembly read as a flat bar; a raised, rotated camera
             // shows three faces at once and reads as an object in space. This
             // is the angle you would choose to photograph the part.
-            gsap.to(camera.position, { x: 7.6, y: 6.2, z: 15.2, duration: 1.5, ease: "power2.inOut" });
+            gsap.to(camera.position, { x: 7.6, y: 6.2, z: 15.2, duration: 1.5, ease: "power2.inOut", overwrite: "auto" });
         }
     }, [viewMode, camera]);
     return null;
@@ -145,7 +159,7 @@ const GLTFCacheLoader = ({ project, onCached }) => {
  *    their surface turns away from the camera, which is what makes the cloud
  *    read as a lit object rather than a cluster of noise.
  */
-const DotMaterial = ({ facingRef }) => {
+const DotMaterial = () => {
     const matRef = useRef();
     const { camera, gl } = useThree();
 
@@ -154,8 +168,6 @@ const DotMaterial = ({ facingRef }) => {
         const u = matRef.current.uniforms;
         u.uRefDist.value = camera.position.length();
         u.uDpr.value = gl.getPixelRatio();
-        // 0 while dots are travelling, 1 once they have settled.
-        u.uFacing.value = facingRef ? facingRef.current : 1;
     });
 
     const uniforms = useMemo(() => ({
@@ -163,7 +175,6 @@ const DotMaterial = ({ facingRef }) => {
         uDpr: { value: 2 },
         uRefDist: { value: 20 },
         uAtten: { value: 0.55 },
-        uFacing: { value: 1 },
         uBackSize: { value: 0.0 },
         uBackAlpha: { value: 0.55 },
         uColor: { value: new THREE.Color('#0a0a0a') },
@@ -179,7 +190,7 @@ const DotMaterial = ({ facingRef }) => {
             vertexShader={`
                 attribute float aScale;
                 attribute vec3 aNormal;
-                uniform float uSize, uDpr, uRefDist, uAtten, uBackSize, uBackAlpha, uFacing;
+                uniform float uSize, uDpr, uRefDist, uAtten, uBackSize, uBackAlpha;
                 varying float vAlpha;
 
                 void main() {
@@ -192,16 +203,11 @@ const DotMaterial = ({ facingRef }) => {
                     vec3 nView = normalize(normalMatrix * aNormal);
                     vec3 toCam = normalize(-mv.xyz);
                     float facing = dot(nView, toCam);
+                    // Always on. Each dot carries its own orientation, which is
+                    // interpolated from the surface it left to the surface it is
+                    // joining while it travels, so there is nothing global to
+                    // toggle and no flash when a transition is queued.
                     float w = smoothstep(-0.05, 0.55, facing);
-
-                    // While the cloud is in motion every dot draws at full
-                    // weight. A dot in flight already carries the orientation
-                    // it will have on arrival, so applying the facing cull
-                    // during travel made roughly half the cloud vanish for the
-                    // whole journey and left the frame empty mid-transition.
-                    // The cull fades in as dots settle, so the mass arrives and
-                    // THEN resolves into a lit surface.
-                    w = mix(1.0, w, uFacing);
 
                     // Tone is carried by dot SIZE, the way a halftone does it,
                     // rather than by fading dots to grey. Grey dots on white
@@ -234,8 +240,6 @@ const DotMaterial = ({ facingRef }) => {
 
 const GridParticles = ({ currentProject, viewMode, onAnimationComplete, allProjects }) => {
     const meshRef = useRef();
-    // Cross-fades the facing cull off while the cloud is travelling.
-    const facingRef = useRef(1);
     const [pointsCache, setPointsCache] = useState({});
 
     // Built-in shapes (always available)
@@ -336,7 +340,7 @@ const GridParticles = ({ currentProject, viewMode, onAnimationComplete, allProje
         return Math.min(1, visibleWidth / (MODEL_FRAME_WIDTH * 1.25));
     }, [viewMode, canvasSize.width, canvasSize.height, camera]);
 
-    useManhattanAnimation(meshRef, animationTarget, onAnimationComplete, viewMode, facingRef);
+    useManhattanAnimation(meshRef, animationTarget, onAnimationComplete, viewMode);
 
     return (
         <>
@@ -355,7 +359,7 @@ const GridParticles = ({ currentProject, viewMode, onAnimationComplete, allProje
                     <bufferAttribute attach="attributes-aNormal" count={POINT_POOL_SIZE} array={initialBuffers.normals} itemSize={3} />
                     <bufferAttribute attach="attributes-aScale" count={POINT_POOL_SIZE} array={initialBuffers.scales} itemSize={1} />
                 </bufferGeometry>
-                <DotMaterial facingRef={facingRef} />
+                <DotMaterial />
             </points>
             </group>
         </>
