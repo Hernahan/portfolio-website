@@ -1,5 +1,9 @@
 import { useFrame } from '@react-three/fiber';
 import { useRef, useEffect, useState } from 'react';
+import { AMBIENT_SPACING } from '../components/Voxelizer';
+
+// Nearest intersection of the ambient background lattice.
+const snapToAmbient = (v) => Math.round(v / AMBIENT_SPACING) * AMBIENT_SPACING;
 
 // Axis order permutations for Manhattan movement
 const AXIS_ORDERS = [
@@ -11,27 +15,43 @@ const AXIS_ORDERS = [
     [2, 1, 0], // Z -> Y -> X
 ];
 
-export const useManhattanAnimation = (meshRef, targetPoints, onComplete, viewMode) => {
+export const useManhattanAnimation = (meshRef, targetCloud, onComplete, viewMode, facingRef) => {
     const [animating, setAnimating] = useState(false);
     const animDataRef = useRef(null);
     const startTimeRef = useRef(-1);
+    const spanRef = useRef(1);
 
     useEffect(() => {
-        if (!meshRef.current || !targetPoints) return;
+        if (!meshRef.current || !targetCloud || !targetCloud.points) return;
+
+        const targetPoints = targetCloud.points;
+        const targetNormals = targetCloud.normals;
 
         const geometry = meshRef.current.geometry;
         const currentPositions = geometry.attributes.position.array;
         const currentScales = geometry.attributes.aScale.array;
+        const currentNormals = geometry.attributes.aNormal.array;
         const targetCount = targetPoints.length;
-        // Process ALL particles to handle entrances and exits
-        // Assuming geometry has fixed size POINT_POOL_SIZE (passed via meshRef check? No, array length)
+        // Process ALL particles to handle entrances and exits.
         const totalCount = currentPositions.length / 3;
+
+        // Surface orientation is adopted immediately rather than interpolated.
+        // Dots are in flight during the morph, so nobody can perceive the
+        // shading being "early", and this keeps the per-frame loop to position
+        // and scale only.
+        for (let i = 0; i < targetCount && i < totalCount; i++) {
+            const n = targetNormals[i];
+            currentNormals[i * 3] = n.x;
+            currentNormals[i * 3 + 1] = n.y;
+            currentNormals[i * 3 + 2] = n.z;
+        }
+        geometry.attributes.aNormal.needsUpdate = true;
 
         // Data layout per particle (13 floats):
         // [sX, sY, sZ, tX, tY, tZ, delay, stepDur, ax0, ax1, ax2, startScale, targetScale]
         const data = new Float32Array(totalCount * 13);
 
-        // Pre-calculate center of TARGETS for stagger
+        // Pre-calculate center of TARGETS for stagger.
         let centerX = 0, centerY = 0, centerZ = 0;
         if (targetCount > 0) {
             for (let i = 0; i < targetCount; i++) {
@@ -44,8 +64,13 @@ export const useManhattanAnimation = (meshRef, targetPoints, onComplete, viewMod
             centerZ /= targetCount;
         }
 
-        // Find max distance
-        let maxDist = 1;
+        // Radius of the target cloud, used to normalise the stagger.
+        //
+        // This used to be corrupted by the point-pool padding: unused slots sat
+        // at y = -500, so maxDist came out around 500 and every real dot got a
+        // delay of ~0.002s. The stagger existed in the code but was invisible,
+        // which is why the morph read as one undifferentiated lurch.
+        let maxDist = 1e-3;
         if (targetCount > 0) {
             for (let i = 0; i < targetCount; i++) {
                 const dx = targetPoints[i].x - centerX;
@@ -80,27 +105,37 @@ export const useManhattanAnimation = (meshRef, targetPoints, onComplete, viewMod
                     tScale = 1.0;
                 } else {
                     // CASE 2: ENTERING (Hidden -> Visible)
-                    // Start AT the target position, scale up from 0
-                    sX = tX;
-                    sY = tY;
-                    sZ = tZ;
+                    //
+                    // These dots used to appear at their destination and fade
+                    // up in place. Because a model needs far more dots than the
+                    // ambient field has, that meant most of the cloud simply
+                    // materialised and the Manhattan travel was only visible on
+                    // a small minority. The morph read as a pop.
+                    //
+                    // Now they rise out of the nearest intersection of the
+                    // ambient lattice and travel to their place in the form, so
+                    // the whole field visibly gathers into the object.
+                    sX = snapToAmbient(tX);
+                    sY = snapToAmbient(tY);
+                    sZ = 0;
                     sScale = 0.0;
                     tScale = 1.0;
 
-                    // Init position immediately to target
                     currentPositions[idx] = sX;
                     currentPositions[idx + 1] = sY;
                     currentPositions[idx + 2] = sZ;
                 }
             } else {
                 // CASE 3: EXITING (Visible -> Hidden)
-                // Stay at current position, scale down to 0
+                // Settle back down onto the ambient lattice while fading, so
+                // leaving a project is the same gesture played backwards.
                 sX = currentPositions[idx];
                 sY = currentPositions[idx + 1];
                 sZ = currentPositions[idx + 2];
 
-                // Target is same as start (no movement)
-                tX = sX; tY = sY; tZ = sZ;
+                tX = snapToAmbient(sX);
+                tY = snapToAmbient(sY);
+                tZ = 0;
 
                 sScale = isVisibleStart ? 1.0 : 0.0;
                 tScale = 0.0;
@@ -120,10 +155,13 @@ export const useManhattanAnimation = (meshRef, targetPoints, onComplete, viewMod
             const measureY = tY - centerY;
             const measureZ = tZ - centerZ;
             const dist = Math.sqrt(measureX * measureX + measureY * measureY + measureZ * measureZ);
-            const delayBase = (dist / maxDist) * 0.25;
+            // Ordered sweep from the middle of the form outwards, with only a
+            // little jitter. Too much randomness reads as noise settling; too
+            // little reads as a rigid expanding shell.
+            const delayBase = (dist / maxDist) * 0.50;
 
-            data[dIdx + 6] = delayBase + Math.random() * 0.1;
-            data[dIdx + 7] = 0.18; // Step duration
+            data[dIdx + 6] = delayBase + Math.random() * 0.07;
+            data[dIdx + 7] = 0.19; // Per-axis step duration
 
             const axisOrder = AXIS_ORDERS[Math.floor(Math.random() * 6)];
             data[dIdx + 8] = axisOrder[0];
@@ -134,11 +172,21 @@ export const useManhattanAnimation = (meshRef, targetPoints, onComplete, viewMod
             data[dIdx + 12] = tScale;
         }
 
+        // Longest delay + travel time, so the shader knows when the cloud has
+        // finished arriving and the facing cull can be brought back in.
+        let span = 0;
+        for (let i = 0; i < totalCount; i++) {
+            const end = data[i * 13 + 6] + data[i * 13 + 7] * 3;
+            if (end > span) span = end;
+        }
+        spanRef.current = Math.max(0.001, span);
+
+        if (facingRef) facingRef.current = 0;
         animDataRef.current = data;
         startTimeRef.current = -1;
         setAnimating(true);
 
-    }, [targetPoints, viewMode]);
+    }, [targetCloud, viewMode]);
 
     useFrame((state) => {
         if (!animating || !animDataRef.current || !meshRef.current) return;
@@ -213,17 +261,28 @@ export const useManhattanAnimation = (meshRef, targetPoints, onComplete, viewMod
             // SCALE ANIMATION
             const sScale = data[dIdx + 11];
             const tScale = data[dIdx + 12];
-            // Animate scale over the full duration
-            const scaleProgress = Math.min(1, t / totalDur);
+            // Resolve size over the first half of the journey rather than the
+            // whole of it. Spread across the full duration, arriving dots were
+            // still near-invisible for most of their travel and the frame went
+            // briefly empty mid-transition.
+            const scaleProgress = Math.min(1, t / (totalDur * 0.5));
             scales[i] = sScale + (tScale - sScale) * smoothStep(scaleProgress);
         }
 
         geometry.attributes.position.needsUpdate = true;
         geometry.attributes.aScale.needsUpdate = true;
 
+        if (facingRef) {
+            // Resolve the surface over the back half of the morph.
+            const p = elapsed / spanRef.current;
+            const f = Math.min(1, Math.max(0, (p - 0.45) / 0.55));
+            facingRef.current = f * f * (3 - 2 * f);
+        }
+
         if (!active) {
             setAnimating(false);
             startTimeRef.current = -1;
+            if (facingRef) facingRef.current = 1;
             if (onComplete) onComplete();
         }
     });

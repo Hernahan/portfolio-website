@@ -6,81 +6,15 @@ import gsap from 'gsap';
 
 import './index.css';
 
-// Typewriter Hint Component
-const TypewriterHint = ({ active }) => {
-    const [text, setText] = useState('');
-    const [shouldType, setShouldType] = useState(false);
-    const fullText = 'Too low res? Click "More Information" on the left.';
-
-    // Delay effect
-    useEffect(() => {
-        let timer;
-        if (active) {
-            // Wait 1.5 seconds for Manhattan animation to finish before typing
-            timer = setTimeout(() => setShouldType(true), 1500);
-        } else {
-            setShouldType(false);
-        }
-        return () => clearTimeout(timer);
-    }, [active]);
-
-    // Typing effect
-    useEffect(() => {
-        let timeout;
-
-        if (active && shouldType) {
-            // Typing forward
-            if (text.length < fullText.length) {
-                timeout = setTimeout(() => {
-                    setText(fullText.slice(0, text.length + 1));
-                }, 25); // Faster typing speed (was 50)
-            }
-        } else if (!active) {
-            // Typing backward (deleting)
-            if (text.length > 0) {
-                timeout = setTimeout(() => {
-                    setText(text.slice(0, text.length - 1));
-                }, 15); // Faster deleting speed
-            }
-        }
-
-        return () => clearTimeout(timeout);
-    }, [active, shouldType, text, fullText]);
-
-    if (!text && !active) return null;
-
-    return (
-        <div style={{
-            position: 'fixed',
-            left: '70%',
-            top: '75%', // Positioned under the model generally
-            transform: 'translateX(-50%)',
-            pointerEvents: 'none',
-            zIndex: 100,
-            fontFamily: 'monospace',
-            fontSize: '0.8rem',
-            color: 'rgba(0,0,0,0.5)',
-            textShadow: '0 1px 2px rgba(255,255,255,0.8)',
-            whiteSpace: 'nowrap'
-        }}>
-            {text}
-            <span style={{ opacity: (active && shouldType && text.length < fullText.length) ? 1 : 0 }} className="animate-pulse">|</span>
-        </div>
-    );
-};
-
 function App() {
     const [currentProjectIndex, setCurrentProjectIndex] = useState(-1); // -1 = no project active
     const [viewMode, setViewMode] = useState('LANDING');
-    const [layoutLocked, setLayoutLocked] = useState(false);
+    const [, setLayoutLocked] = useState(false);
     const [isExiting, setIsExiting] = useState(false);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [modalProject, setModalProject] = useState(null);
     const [emailCopied, setEmailCopied] = useState(false);
 
-
-    // Hint state
-    const [hintDismissed, setHintDismissed] = useState(false);
 
     const scrollThumbRef = useRef(null);
     const headerRef = useRef(null);
@@ -89,8 +23,38 @@ function App() {
 
     // Calculate scroll thresholds dynamically based on project count
     // HTML structure: Hero (100vh) + About (100vh) + Projects (100vh each) + Contact (100vh)
+    // Recomputed on resize. This used to be a useMemo with an empty dependency
+    // list, so every scroll threshold was frozen at the viewport height present
+    // on first paint. Resizing the window, rotating a phone, or the mobile
+    // address bar collapsing left the section boundaries pointing at the wrong
+    // scroll offsets, and projects would activate against the wrong panel.
+    const [viewport, setViewport] = useState(() => ({ h: window.innerHeight, w: window.innerWidth }));
+    const viewportHeight = viewport.h;
+
+    // Single breakpoint. The layout was built entirely from fixed percentages
+    // with no media queries at all, so on a phone the name overflowed the
+    // screen, the project card sat under the fixed header, and the model ran
+    // off the right edge.
+    const isNarrow = viewport.w < 820;
+
+    useEffect(() => {
+        let frame = 0;
+        const onResize = () => {
+            cancelAnimationFrame(frame);
+            frame = requestAnimationFrame(() =>
+                setViewport({ h: window.innerHeight, w: window.innerWidth }));
+        };
+        window.addEventListener('resize', onResize);
+        window.addEventListener('orientationchange', onResize);
+        return () => {
+            cancelAnimationFrame(frame);
+            window.removeEventListener('resize', onResize);
+            window.removeEventListener('orientationchange', onResize);
+        };
+    }, []);
+
     const scrollConfig = useMemo(() => {
-        const vh = window.innerHeight;
+        const vh = viewportHeight;
 
         // Hero section: 0 to 1vh
         const heroEnd = vh * 0.5;  // Header animation completes halfway through hero
@@ -114,13 +78,21 @@ function App() {
         // Total page height: hero + about + projects + contact
         const totalHeight = vh + vh + (projects.length * vh) + vh;
 
-        return { heroEnd, aboutStart, aboutEnd, projectsStart, projectSections, contactStart, totalHeight, vh };
-    }, []);
+        // Type scale that cannot overflow the viewport. 4.5rem is 72px, which
+        // is wider than a phone screen for a name this long.
+        const headerStart = isNarrow ? 2.15 : 4.5;
+        const headerEnd = isNarrow ? 1.15 : 2.2;
+
+        return {
+            heroEnd, aboutStart, aboutEnd, projectsStart, projectSections,
+            contactStart, totalHeight, vh, headerStart, headerEnd,
+        };
+    }, [viewportHeight, isNarrow]);
 
     useEffect(() => {
         const handleScroll = () => {
             const scrollY = window.scrollY;
-            const { heroEnd, aboutStart, aboutEnd, projectSections, contactStart, vh } = scrollConfig;
+            const { heroEnd, aboutStart, aboutEnd, projectSections, contactStart } = scrollConfig;
 
             // Header animation progress (0 to 1)
             const headerProgress = Math.max(0, Math.min(1, scrollY / heroEnd));
@@ -130,9 +102,9 @@ function App() {
                 const topPercent = 50 * (1 - headerProgress);
                 const translateX = -50 * (1 - headerProgress);
                 const translateY = -50 * (1 - headerProgress);
-                const paddingOffset = headerProgress * 2.5;
-                const startFontSize = 4.5;
-                const endFontSize = 2.2;
+                const paddingOffset = headerProgress * (isNarrow ? 1.1 : 2.5);
+                const startFontSize = scrollConfig.headerStart;
+                const endFontSize = scrollConfig.headerEnd;
                 const currentFontSize = startFontSize - (startFontSize - endFontSize) * headerProgress;
                 const duration = scrollY === 0 ? 0 : 0.1;
 
@@ -209,7 +181,7 @@ function App() {
         handleScroll();
         window.addEventListener('scroll', handleScroll, { passive: true });
         return () => window.removeEventListener('scroll', handleScroll);
-    }, [scrollConfig]);
+    }, [scrollConfig, isNarrow]);
 
     // One-time header position initialization
     useEffect(() => {
@@ -235,8 +207,6 @@ function App() {
         if (!project.details) return; // Skip projects without details
         setModalProject(project);
         setIsModalOpen(true);
-        // Dismiss hint permanently when modal opens
-        setHintDismissed(true);
     }, []);
 
     const handleCloseModal = useCallback(() => {
@@ -256,13 +226,6 @@ function App() {
         };
     }, [isModalOpen]);
 
-    // Dismiss hint logic when scrolling past first project
-    useEffect(() => {
-        if (!hintDismissed && currentProjectIndex > 0) {
-            setHintDismissed(true);
-        }
-    }, [currentProjectIndex, hintDismissed]);
-
     const isLanding = viewMode === 'LANDING';
     const isProject = viewMode === 'PROJECT';
     const showLeftPanel = isProject;
@@ -275,12 +238,10 @@ function App() {
     // 2. We are on the first project (index 0)
     // 3. We are in PROJECT view mode
     // 4. Modal is not open
-    const showHint = !hintDismissed && currentProjectIndex === 0 && viewMode === 'PROJECT' && !isModalOpen;
 
     return (
         <>
             {/* Typewriter Hint */}
-            <TypewriterHint active={showHint} />
 
             {/* 3D MODEL VIEWER - Always 100% width, panel overlays on top */}
             <div style={{
@@ -291,14 +252,14 @@ function App() {
                 height: '100vh',
                 zIndex: 0,
             }}>
-                <WorldGrid currentProject={currentProject} viewMode={viewMode} onAnimationComplete={handleAnimationComplete} allProjects={projects} />
+                <WorldGrid currentProject={currentProject} viewMode={viewMode} onAnimationComplete={handleAnimationComplete} allProjects={projects} isNarrow={isNarrow} />
             </div>
 
             {/* LEFT PANEL BACKGROUND - Blocks OrbitControls on left 40% */}
             <div style={{
-                position: 'fixed', top: 0, left: 0, width: '40vw', height: '100vh',
+                position: 'fixed', top: 0, left: 0, width: isNarrow ? '100vw' : '40vw', height: '100vh',
                 backgroundColor: 'rgba(234, 234, 234, 0.3)', backdropFilter: 'blur(2px)',
-                zIndex: 5, opacity: showLeftPanel ? 1 : 0,
+                zIndex: 5, opacity: showLeftPanel && !isNarrow ? 1 : 0,
                 pointerEvents: showLeftPanel ? 'auto' : 'none',
                 transition: 'opacity 0.3s ease',
             }} />
@@ -307,7 +268,7 @@ function App() {
             <div style={{
                 position: 'fixed', top: 0, left: '40%', width: '1px', height: '100%',
                 background: 'linear-gradient(to bottom, transparent 5%, rgba(0,0,0,0.15) 50%, transparent 95%)',
-                zIndex: 15, pointerEvents: 'none', opacity: showLeftPanel ? 1 : 0,
+                zIndex: 15, pointerEvents: 'none', opacity: showLeftPanel && !isNarrow ? 1 : 0,
                 transition: 'opacity 0.3s ease',
             }} />
 
@@ -322,7 +283,7 @@ function App() {
                 borderRadius: '2px',
                 zIndex: 16,
                 pointerEvents: 'none',
-                opacity: showLeftPanel ? 1 : 0,
+                opacity: showLeftPanel && !isNarrow ? 1 : 0,
                 transition: 'opacity 0.3s ease',
             }}>
                 {/* Scroll Thumb - Indicates current scroll position */}
@@ -363,7 +324,17 @@ function App() {
                     ref={headerRef}
                     style={{
                         position: 'fixed', left: '50%', top: '50%',
-                        padding: '2rem', zIndex: 20, pointerEvents: 'none', willChange: 'left, top, transform',
+                        padding: isNarrow ? '0.75rem 1rem' : '2rem',
+                        zIndex: 20, pointerEvents: 'none', willChange: 'left, top, transform',
+                        // On a phone the project sheets scroll straight past
+                        // the fixed name block. Without a background the two
+                        // sets of text sat on top of each other and neither was
+                        // readable, so the name gets its own opaque plate.
+                        ...(isNarrow ? {
+                            backgroundColor: 'rgba(255,255,255,0.94)',
+                            backdropFilter: 'blur(8px)',
+                            border: '1px solid rgba(0,0,0,0.07)',
+                        } : null),
                     }}
                 >
                     <div style={{
@@ -484,10 +455,17 @@ function App() {
                 {projects.map((project, index) => (
                     <section
                         key={project.id}
-                        style={{ height: '100vh', width: '100%', display: 'flex', alignItems: 'center', padding: '3rem' }}
+                        style={{
+                            height: '100vh', width: '100%', display: 'flex',
+                            alignItems: isNarrow ? 'flex-end' : 'center',
+                            padding: isNarrow ? '1rem 1rem 2rem' : '3rem',
+                        }}
                     >
                         <div style={{
-                            width: '36%', backgroundColor: 'rgba(255,255,255,0.94)', padding: '2rem', pointerEvents: 'auto',
+                            width: isNarrow ? '100%' : '36%',
+                            backgroundColor: 'rgba(255,255,255,0.94)',
+                            padding: isNarrow ? '1.25rem' : '2rem',
+                            pointerEvents: 'auto',
                             backdropFilter: 'blur(12px)', border: '1px solid rgba(0,0,0,0.08)', boxShadow: '0 4px 30px rgba(0,0,0,0.04)',
                         }}>
                             <span style={{ fontFamily: 'monospace', fontSize: '0.65rem', color: '#888', letterSpacing: '0.15em' }}>

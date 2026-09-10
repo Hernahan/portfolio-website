@@ -4,6 +4,11 @@
  * Add new projects by adding objects to this array.
  * Place your .glb files in /public/models/ and reference them with modelPath.
  * 
+ * `scale` is a size multiplier, not an absolute size. Each model is fitted to
+ * a common frame automatically (see Voxelizer.generateMeshPoints), so 1 means
+ * "fill the frame like everything else" and you only need to change it to
+ * deliberately make one project read larger or smaller than its neighbours.
+ *
  * For "Deep Dive" modal:
  * - details.partsFolder: exact folder name in public/CAD-more-info/
  * - details.parts: array of part objects with:
@@ -21,8 +26,7 @@ export const projects = [
         expandedDescription: 'The first major CAD project I did in college as apart of the UMass rocketry team. Completed with the intended purpose of winning NASA\'s USLI 2024-2025 competition.\n\nOur payload transmitted basic telemetry data throughout the flight, landed <5Gs, and then transmitted a morse code "ALL OK" signal to a NASA ground station. Everything worked as intended, and we were awarded top 6th nationally for USLI 2024-2025.',
         tags: ['CAD', 'SOLIDWORKS'],
         modelPath: '/CAD-files/Freshman year payload assembly.gltf',
-        scale: 8,
-        pointsPerUnit: 0.3,
+        scale: 1,
         details: {
             partsFolder: 'Freshman Payload Assembly Parts',
             mediaFolder: 'Freshman Payload Assembly Media',
@@ -43,8 +47,7 @@ export const projects = [
         expandedDescription: 'First iteration of an excavator mechanism design created for USLI 2025-2026. Utilized an extracted drill motor to drive a belt (intended to have scoopers attached) with the intended purpose of extracting soil from the landing site.\n\nDropped in favor of a more powerful, less spacially efficient design since space constraints onboard were not as severe as previously observed.',
         tags: ['CAD', 'MECHANICAL'],
         modelPath: '/CAD-files/excavator v1.gltf',
-        scale: 8,
-        pointsPerUnit: 0.3,
+        scale: 1,
         details: {
             partsFolder: 'Excavator V1 Parts',
             mediaFolder: 'Excavator V1 Media',
@@ -65,8 +68,7 @@ export const projects = [
         expandedDescription: 'A more powerful, less spatially efficient version of Excavator V1. The main difference is the incorporation of the **entire drill**, allowing for the motor be used as a power input as well as an axis of rotation.\n\nLarger, dedicated scoopers for larger extraction volume in the given time limit. Dedicated conveyor belt for soil transport. Double-axis system provides power input to the scooper + belt from a single power source.',
         tags: ['CAD', 'MECHANICAL'],
         modelPath: '/CAD-files/excavator v2.gltf',
-        scale: 8,
-        pointsPerUnit: 0.3,
+        scale: 1,
         details: {
             partsFolder: 'Excavator V2 Parts',
             mediaFolder: 'Excavator V2 Media',
@@ -88,8 +90,7 @@ export const projects = [
         expandedDescription: 'Supersonic payload design v1, full assembly. Vibration isolator houses the IMU, with passage for wires from vibration module → communication module. Machined aluminum rails + guider for maximum precision.\n\nAble to achieve trans/low supersonic speeds while delivering accurate telemetry data.',
         tags: ['CAD', 'ASSEMBLY'],
         modelPath: '/CAD-files/MockupFullCAD2USkeletons web file.gltf',
-        scale: 12,
-        pointsPerUnit: 0.3,
+        scale: 1,
         details: {
             partsFolder: 'Mockup Assembly Parts',
             mediaFolder: 'Mockup Assembly Media',
@@ -109,8 +110,7 @@ export const projects = [
         // Placeholder - model not yet available
         modelPath: null,
         builtInShape: 'sphere', // Using sphere as placeholder until model is ready
-        scale: 5,
-        pointsPerUnit: 0.55,
+        scale: 1,
         isPlaceholder: true, // Flag to indicate this is a work-in-progress
         details: null // No deep dive available for placeholder projects
     },

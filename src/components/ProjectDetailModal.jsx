@@ -1,6 +1,6 @@
 import React, { useRef, useState, Suspense, useEffect, useMemo, useCallback } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, Html, useGLTF, OrthographicCamera, PerspectiveCamera, Environment } from '@react-three/drei';
+import { OrbitControls, Html, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import gsap from 'gsap';
 
@@ -66,6 +66,80 @@ const getBoundingBoxInfo = (object) => {
     };
 };
 
+/** On-screen size, in world units, that every assembly is normalised to. */
+const ASSEMBLY_TARGET_SIZE = 6.2;
+
+/**
+ * Bounds that ignore thin outlying geometry.
+ *
+ * The payload assembly is a compact body with a long thin antenna, and the
+ * antenna is two thirds of the bounding box. Framing the box therefore shrank
+ * the part anyone actually wants to look at down to a thumbnail in the corner.
+ * Taking percentile bounds over sampled vertices frames the bulk of the model
+ * and lets slender features run out of frame, which is what a person setting
+ * up this shot would do.
+ */
+const getRobustBounds = (root, lo = 0.03, hi = 0.97, maxSamples = 8000) => {
+    const xs = [], ys = [], zs = [];
+    const v = new THREE.Vector3();
+    const meshes = [];
+    root.updateWorldMatrix(true, true);
+    root.traverse((o) => { if (o.isMesh && o.geometry?.attributes?.position) meshes.push(o); });
+
+    let total = 0;
+    for (const m of meshes) total += m.geometry.attributes.position.count;
+    const stride = Math.max(1, Math.floor(total / maxSamples));
+
+    let i = 0;
+    for (const m of meshes) {
+        const pos = m.geometry.attributes.position;
+        for (let k = 0; k < pos.count; k++, i++) {
+            if (i % stride) continue;
+            v.fromBufferAttribute(pos, k).applyMatrix4(m.matrixWorld);
+            xs.push(v.x); ys.push(v.y); zs.push(v.z);
+        }
+    }
+    if (!xs.length) {
+        const box = new THREE.Box3().setFromObject(root);
+        const c = new THREE.Vector3(), sz = new THREE.Vector3();
+        box.getCenter(c); box.getSize(sz);
+        return { center: c, size: sz };
+    }
+
+    const band = (arr) => {
+        arr.sort((a, b) => a - b);
+        const a = arr[Math.floor(lo * (arr.length - 1))];
+        const b = arr[Math.floor(hi * (arr.length - 1))];
+        return [a, b];
+    };
+    const [x0, x1] = band(xs), [y0, y1] = band(ys), [z0, z1] = band(zs);
+    return {
+        center: new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2),
+        size: new THREE.Vector3(Math.max(1e-6, x1 - x0), Math.max(1e-6, y1 - y0), Math.max(1e-6, z1 - z0)),
+    };
+};
+
+/**
+ * Fit an object into `targetSize` without touching its own transform.
+ *
+ * The previous approach set `scale` directly on the glTF node. Exported CAD
+ * scenes usually carry their own scale (millimetre models arrive at 0.001),
+ * and writing to `scale` REPLACES that value rather than composing with it.
+ * The bounding box had been measured with the original scale still applied, so
+ * once it was overwritten both the size and the centring offset referred to a
+ * model that no longer existed. That is why the assembly sat half outside the
+ * top of its panel and the parts were wildly oversized.
+ *
+ * Scaling and centring an enclosing group leaves the model's transform intact.
+ */
+const fitToBox = (object, targetSize) => {
+    const { maxDimension, center } = getBoundingBoxInfo(object);
+    return {
+        scale: maxDimension > 0 ? targetSize / maxDimension : 1,
+        center,
+    };
+};
+
 /**
  * Calculate grid layout for N parts
  */
@@ -80,30 +154,42 @@ const calculateGrid = (partCount) => {
  * Individual Part Component for Grid Layout
  * LIGHT THEME: Dark models on white background
  */
-const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover, onLoaded }) => {
+const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover, onLoaded, spinRef }) => {
     const [hovered, setHovered] = useState(false);
     const meshRef = useRef();
+    const spinGroup = useRef();
+
+    useFrame(() => {
+        if (spinGroup.current && spinRef) spinGroup.current.rotation.y = spinRef.current;
+    });
 
     const { scene } = useGLTF(partUrl);
 
-    const { clonedScene, scale, centerOffset } = useMemo(() => {
+    const { clonedScene, scale, center } = useMemo(() => {
         const clone = scene.clone();
         clone.traverse((child) => {
             if (child.isMesh) {
                 // Dark gray material for light theme
+                // A metallic material with no environment map has nothing to
+                // reflect, so it renders almost black and the part reads as a
+                // flat silhouette. Non-metallic mid-grey lets the directional
+                // lights describe the actual form.
                 child.material = new THREE.MeshStandardMaterial({
-                    color: '#444444',
-                    metalness: 0.3,
-                    roughness: 0.5,
+                    color: '#9a9a9a',
+                    metalness: 0.0,
+                    roughness: 0.62,
+                    // CAD exports routinely carry inconsistent triangle
+                    // winding. With single-sided material the assembly was
+                    // drawn every frame and then entirely back-face culled,
+                    // so the panel rendered empty while the draw call and its
+                    // 108k triangles still showed up in the renderer stats.
+                    side: THREE.DoubleSide,
                 });
             }
         });
 
-        const { maxDimension, center } = getBoundingBoxInfo(clone);
-        const targetScale = cellSize > 0 ? (cellSize * 0.75) / maxDimension : 1;
-        const centerOffset = center.clone().multiplyScalar(-targetScale);
-
-        return { clonedScene: clone, scale: targetScale, centerOffset };
+        const { scale: targetScale, center } = fitToBox(clone, cellSize * 0.75);
+        return { clonedScene: clone, scale: targetScale, center };
     }, [scene, cellSize]);
 
     // Call onLoaded when the scene is ready
@@ -134,8 +220,14 @@ const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover,
             onPointerOver={handlePointerOver}
             onPointerOut={handlePointerOut}
         >
-            <group position={[centerOffset.x, centerOffset.y, centerOffset.z]}>
-                <primitive object={clonedScene} scale={scale} />
+            {/* Tilted slightly so each component reads as a solid rather than
+              * a flat elevation, then spun about its own vertical axis. */}
+            <group ref={spinGroup} rotation={[0.32, 0, 0]}>
+                <group scale={scale}>
+                    <group position={[-center.x, -center.y, -center.z]}>
+                        <primitive object={clonedScene} />
+                    </group>
+                </group>
             </group>
 
             {hovered && (
@@ -168,6 +260,9 @@ const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover,
     );
 };
 
+/** Stable identity, so the "no parts" case does not churn effects. */
+const EMPTY_PARTS = [];
+
 /**
  * Parts Grid Scene with drag-to-spin and auto-pause on hover
  * LIGHT THEME: White background
@@ -175,6 +270,13 @@ const GridPart = ({ partUrl, gridPosition, cellSize, name, description, onHover,
 const PartsGridScene = ({ project, onLoaded }) => {
     const { viewport, gl } = useThree();
     const groupRef = useRef();
+    // Shared spin angle, applied to each part about its OWN axis.
+    //
+    // Rotating the containing group instead turned the whole grid in 3D. Under
+    // an orthographic camera that collapses the columns towards each other as
+    // the angle approaches 90 degrees, which is why the parts kept piling up on
+    // top of one another instead of sitting in a tidy 3 x 2 grid.
+    const spinRef = useRef(0.6);
     const isDragging = useRef(false);
     const lastX = useRef(0);
     const manualVelocity = useRef(0);
@@ -193,10 +295,10 @@ const PartsGridScene = ({ project, onLoaded }) => {
         };
 
         const handlePointerMove = (e) => {
-            if (isDragging.current && groupRef.current) {
+            if (isDragging.current) {
                 const deltaX = e.clientX - lastX.current;
                 manualVelocity.current = deltaX * 0.005;
-                groupRef.current.rotation.y += manualVelocity.current;
+                spinRef.current += manualVelocity.current;
                 lastX.current = e.clientX;
                 pauseUntil.current = Date.now() + 2000;
             }
@@ -220,13 +322,10 @@ const PartsGridScene = ({ project, onLoaded }) => {
     }, [gl]);
 
     useFrame((state, delta) => {
-        if (groupRef.current) {
-            const now = Date.now();
-            const shouldPause = isHovering || now < pauseUntil.current;
-
-            if (!isDragging.current && !shouldPause) {
-                groupRef.current.rotation.y += delta * 0.15;
-            }
+        const now = Date.now();
+        const shouldPause = isHovering || now < pauseUntil.current;
+        if (!isDragging.current && !shouldPause) {
+            spinRef.current += delta * 0.15;
         }
     });
 
@@ -244,9 +343,12 @@ const PartsGridScene = ({ project, onLoaded }) => {
         }
     }, [onLoaded]);
 
-    if (!project?.details?.parts) return null;
-
-    const { partsFolder, parts } = project.details;
+    // Derived before any early return: hooks must run in the same order on
+    // every render, and this effect used to sit after `return null`, so a
+    // project without parts would change the hook order and break the
+    // component on the next render.
+    const parts = project?.details?.parts ?? EMPTY_PARTS;
+    const partsFolder = project?.details?.partsFolder;
     const partCount = parts.length;
 
     // Track total parts for loading callback
@@ -269,6 +371,8 @@ const PartsGridScene = ({ project, onLoaded }) => {
     const gridHeight = rows * cellSize;
     const offsetX = -gridWidth / 2 + cellSize / 2;
     const offsetY = gridHeight / 2 - cellSize / 2;
+
+    if (partCount === 0) return null;
 
     const partPositions = parts.map((_, index) => {
         const col = index % cols;
@@ -296,6 +400,7 @@ const PartsGridScene = ({ project, onLoaded }) => {
                                 description={part.description}
                                 onHover={handlePartHover}
                                 onLoaded={handlePartLoaded}
+                                spinRef={spinRef}
                             />
                         </Suspense>
                     );
@@ -310,29 +415,51 @@ const PartsGridScene = ({ project, onLoaded }) => {
  * LIGHT THEME: Dark models, RMB pan enabled
  */
 const SolidAssemblyScene = ({ project, onLoaded }) => {
-    const { viewport } = useThree();
     const { scene } = useGLTF(project.modelPath);
 
-    const { clonedScene, scale, centerOffset } = useMemo(() => {
+    const { clonedScene, center, alignRotation, fitScale } = useMemo(() => {
         const clone = scene.clone();
         clone.traverse((child) => {
             if (child.isMesh) {
-                // Dark gray material for light theme
+                // A metallic material with no environment map has nothing to
+                // reflect, so it renders almost black and the part reads as a
+                // flat silhouette. Non-metallic mid-grey lets the directional
+                // lights describe the actual form.
                 child.material = new THREE.MeshStandardMaterial({
-                    color: '#444444',
-                    metalness: 0.3,
-                    roughness: 0.5,
+                    color: '#9a9a9a',
+                    metalness: 0.0,
+                    roughness: 0.62,
+                    // CAD exports routinely carry inconsistent triangle
+                    // winding. With single-sided material the assembly was
+                    // drawn every frame and then entirely back-face culled,
+                    // so the panel rendered empty while the draw call and its
+                    // 108k triangles still showed up in the renderer stats.
+                    side: THREE.DoubleSide,
                 });
             }
         });
+        // Percentile bounds over sampled vertices. Thin features carry few
+        // vertices, so this naturally trims a long antenna out of the framing
+        // while keeping the body of the assembly.
+        const { center, size: rb } = getRobustBounds(clone);
+        const width = rb.x, height = rb.y, depth = rb.z;
 
-        const { maxDimension, center } = getBoundingBoxInfo(clone);
-        const targetSize = Math.min(viewport.width, viewport.height) * 0.7;
-        const targetScale = maxDimension > 0 ? targetSize / maxDimension : 1;
-        const centerOffset = center.clone().multiplyScalar(-targetScale);
+        // Lay the longest axis across the screen. These assemblies are modelled
+        // along their own long axis, and the panel is landscape, so a model
+        // left upright wastes most of the frame. This also matches the
+        // orientation the dot view presents, so opening a project no longer
+        // reorients the object under you.
+        let alignRotation = [0, 0, 0];
+        if (height >= width && height >= depth) alignRotation = [0, 0, -Math.PI / 2];
+        else if (depth >= width && depth >= height) alignRotation = [0, Math.PI / 2, 0];
 
-        return { clonedScene: clone, scale: targetScale, centerOffset };
-    }, [scene, viewport.width, viewport.height]);
+        // Normalise to a known on-screen size so the camera can be fixed.
+        // Runtime auto-fitting kept fighting the controls and the second
+        // camera; a deterministic scale is far easier to reason about.
+        const fitScale = ASSEMBLY_TARGET_SIZE / Math.max(width, height, depth);
+
+        return { clonedScene: clone, center, alignRotation, fitScale };
+    }, [scene]);
 
     // Call onLoaded when the scene is ready
     useEffect(() => {
@@ -349,11 +476,19 @@ const SolidAssemblyScene = ({ project, onLoaded }) => {
             <directionalLight position={[-5, 5, -5]} intensity={0.5} />
             <directionalLight position={[0, -5, 0]} intensity={0.3} />
 
-            <group>
-                <group position={[centerOffset.x, centerOffset.y, centerOffset.z]}>
-                    <primitive object={clonedScene} scale={scale} />
+            {/*
+              * Framing is delegated to Bounds rather than scaling the model to
+              * a guess at the viewport. Bounds measures the object and moves
+              * the camera to frame it, which is resolution independent and
+              * refits on resize, so the assembly can no longer end up half
+              * outside the top of its panel.
+              */}
+            <group scale={fitScale} rotation={alignRotation}>
+                <group position={[-center.x, -center.y, -center.z]}>
+                    <primitive object={clonedScene} />
                 </group>
             </group>
+
 
             {/* OrbitControls with RMB pan enabled */}
             <OrbitControls
@@ -398,15 +533,10 @@ const PartsCanvas = ({ project, instanceId, onLoad }) => {
             <Canvas
                 key={instanceId}
                 style={{ width: '100%', height: '100%' }}
+                orthographic
+                camera={{ position: [0, 0, 10], zoom: 50, near: 0.1, far: 1000 }}
                 gl={{ antialias: true }}
             >
-                <OrthographicCamera
-                    makeDefault
-                    position={[0, 0, 10]}
-                    zoom={50}
-                    near={0.1}
-                    far={1000}
-                />
                 <color attach="background" args={['#f5f5f5']} />
                 <Suspense fallback={null}>
                     <PartsGridScene project={project} onLoaded={handleLoaded} />
@@ -437,16 +567,19 @@ const AssemblyCanvas = ({ project, instanceId, onLoad }) => {
     return (
         <div style={{ position: 'relative', width: '100%', height: '100%' }}>
             <LoadingOverlay isLoading={isLoading} />
+            {/*
+              * The camera is declared on the Canvas rather than as a drei
+              * <PerspectiveCamera makeDefault> child. With two cameras in play
+              * the scene was measured against one and rendered with the other,
+              * which is why the assembly appeared clipped no matter what the
+              * projected bounds said.
+              */}
             <Canvas
                 key={instanceId}
                 style={{ width: '100%', height: '100%' }}
                 gl={{ antialias: true }}
+                camera={{ position: [4.3, 3.0, 7.4], fov: 45, near: 0.1, far: 200 }}
             >
-                <PerspectiveCamera
-                    makeDefault
-                    position={[0, 3, 10]}
-                    fov={45}
-                />
                 <color attach="background" args={['#f0f0f0']} />
                 <Suspense fallback={null}>
                     <SolidAssemblyScene project={project} onLoaded={handleLoaded} />
